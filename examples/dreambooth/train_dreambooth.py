@@ -50,8 +50,9 @@ from packaging import version
 
 from torch.distributions import Gamma
 
+from diffusers import StableDiffusionPipeline
 
-prompts_with_size = [
+prompts_with_size_contrast = [
     {"prompt": "Solid White Ice", "size": (768, 768)},
     {"prompt": "Solid Black Mountain", "size": (768, 768)},
     {
@@ -63,11 +64,27 @@ prompts_with_size = [
         "size": (768, 768),
     },
     {"prompt": "Shadowy Portal lit by a dim torch", "size": (1024, 768)},
+    {"prompt": "Dramatic Breaking wave", "size": (1024, 768)}
 ]
 
+prompts_with_size = [
+    {"prompt": "good wave", "size": (768, 768)},
+    {"prompt": "normal wave", "size": (768, 768)},
+    {"prompt": "bad wave", "size": (768, 768)},
+    {"prompt": "high aesthetic", "size": (768, 768)},
+    {
+        "prompt": "breaking wave; bad wave",
+        "size": (768, 768),
+    },
+    {
+        "prompt": "dramatic breaking wave; high aesthetic",
+        "size": (768, 768),
+    },
+    {"prompt": "Stunning example of crystal clear barreling wave", "size": (1024, 768)},
+    {"prompt": "Dramatic Breaking wave, good wave", "size": (1024, 768)},
+    {"prompt": "Dramatic Breaking wave, good wave, high aesthetic", "size": (1024, 768)}
+]
 
-print("Test Set")
-print(prompts_with_size)
 
 
 logger = get_logger(__name__)
@@ -121,14 +138,41 @@ def make_pink_noise(latents):
 # Takes the ideas from offset noise(1) and adds uses two gamma distributions to
 # alter the noise schedule adding different amounts of offset noise at different frequencies
 # [1] https://www.crosslabs.org/blog/diffusion-with-offset-noise
-def offset_gamma_noise(latents):
+def gamma_offset_noise(latents):
     device = latents.device
     g2 = torch.clamp(random_gamma((latents.shape[0], latents.shape[1], 1, 1), alpha=0.5, beta=10), 0, 1).to(device)
 
     # g1 is the random freq
     # g2 is the proportion to shift the noise
     noise = torch.randn_like(latents, device=latents.device)
-    return noise + g2 * make_pink_noise(latents)
+    return torch.randn_like(latents) + g2 * torch.randn(latents.shape[0], latents.shape[1], 1, 1)
+
+def offset_noise(latents):
+    return torch.randn_like(latents) + 0.08 * torch.randn(latents.shape[0], latents.shape[1], 1, 1)
+
+
+def gamma_pink_noise(latents):
+    device = latents.device
+    g2 = torch.clamp(random_gamma((latents.shape[0], latents.shape[1], 1, 1), alpha=0.5, beta=10), 0, 1).to(device)
+
+    # g1 is the random freq
+    # g2 is the proportion to shift the noise
+    noise = torch.randn_like(latents, device=latents.device)
+    return torch.randn_like(latents) + g2 * make_pink_noise(latents)
+
+def pyramid_noise_like(x, discount=0.9):
+      b, c, w, h = x.shape
+      u = nn.Upsample(size=(w, h), mode='bilinear')
+      noise = torch.randn_like(x)
+
+      for i in range(10):
+          r = random.random()*2+2 # Rather than always going 2x,
+          w, h = max(1, int(w/(r**i))), max(1, int(h/(r**i)))
+          noise += u(torch.randn(b, c, w, h).to(x)) * discount**i
+          if w==1 or h==1: break # Lowest resolution is 1x1
+
+      return noise/noise.std() # Scaled back to roughly unit variance
+
 
 
 def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: str, revision: str):
@@ -259,7 +303,6 @@ def parse_args(input_args=None):
         action="store_true",
         help="Uses the filename.txt file's content as the image labels instead of the instance_prompt, useful for regularization when training for styles with wide image variance",
     )
-    parser.add_argument("--train_text_encoder", action="store_true", help="Whether to train the text encoder")
     parser.add_argument(
         "--train_batch_size", type=int, default=4, help="Batch size (per device) for the training dataloader."
     )
@@ -350,6 +393,9 @@ def parse_args(input_args=None):
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
     )
     parser.add_argument(
+        "--stop_text", type=int, default=999999999, help="Stop training the text encoder"
+    )
+    parser.add_argument(
         "--dataloader_num_workers",
         type=int,
         default=0,
@@ -422,6 +468,21 @@ def parse_args(input_args=None):
         "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
     )
     parser.add_argument(
+        "--enable_xformers_vae", action="store_true", help="add xformers on vae"
+    )
+    parser.add_argument(
+        "--flash_attention", action="store_true", help="set memory_effecient_attention to flash attention"
+    )
+    parser.add_argument(
+        "--channels_last", action="store_true", help="Whether or not to use channels last."
+    )
+    parser.add_argument(
+        "--enable_vae_tiling", action="store_true", help="Whether or not to use vae tiling."
+    )
+    parser.add_argument(
+        "--enable_attention_slicing", action="store_true", help="Enable Attention Slicing"
+    )
+    parser.add_argument(
         "--set_grads_to_none",
         action="store_true",
         help=(
@@ -433,6 +494,10 @@ def parse_args(input_args=None):
     parser.add_argument("--save_model_every_n_steps", type=int)
     parser.add_argument("--sample_model_every_n_steps", type=int)
     parser.add_argument("--pink_noise", type=bool, default=False)
+    parser.add_argument("--gamma_offset_noise", type=bool, default=False)
+    parser.add_argument("--pyramid_noise", type=bool, default=False)
+    parser.add_argument("--offset_noise", type=bool, default=False)
+    parser.add_argument("--gamma_pink_noise", type=bool, default=False)
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -534,6 +599,16 @@ class DreamBoothDataset(Dataset):
             ]
         )
 
+        self.image_transforms = transforms.Compose(
+            [
+                transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR),
+                transforms.CenterCrop(size) if center_crop else transforms.RandomCrop(size),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+
+
     def __len__(self):
         return self._length
 
@@ -551,7 +626,6 @@ class DreamBoothDataset(Dataset):
         example["instance_images"] = self.image_transforms(instance_image)
         example["instance_prompt_ids"] = self.tokenizer(
             prompt,
-            padding="do_not_pad",
             truncation=True,
             padding="max_length",
             max_length=self.tokenizer.model_max_length,
@@ -654,32 +728,44 @@ import wandb
 PHOTO_COUNT = 2
 
 
-def sample_model(accelerator, unet, text_encoder, args, step=None):
+def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
+    torch_dtype = torch.float16 if accelerator.device.type == "cuda" else torch.float32
+    if args.mixed_precision == "fp32":
+        torch_dtype = torch.float32
+    elif args.mixed_precision == "fp16":
+        torch_dtype = torch.float16
+    elif args.mixed_precision == "bf16":
+        torch_dtype = torch.bfloat16
+
+
     pipeline = StableDiffusionPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
         unet=unet,
         text_encoder=text_encoder,
-        revision=args.revision,
+        vae=vae,
+        torch_dtype=torch_dtype,
     )
     pipeline.to(accelerator.device)
 
+
     for prompt in prompts_with_size:
         for guidance_scale in [12]:
-            # Reset Seed
-            seed = 123123
-            generator = torch.Generator("cuda").manual_seed(seed)
+            with torch.autocast(device_type="cuda", dtype=vae.dtype):
+                # Reset Seed
+                seed = 123123
+                generator = torch.Generator("cuda").manual_seed(seed)
 
-            size = prompt["size"]
-            text = prompt["prompt"]
-            width = size[0]
-            height = size[1]
+                size = prompt["size"]
+                text = prompt["prompt"]
+                width = size[0]
+                height = size[1]
 
-            images = pipeline(
-                [text] * PHOTO_COUNT, num_inference_steps=50, guidance_scale=guidance_scale, width=width, height=height
-            ).images
-            caption = "scale: " + str(guidance_scale)
-            label = caption + ", " + text[0:160]
-            wandb.log({label: [wandb.Image(image, caption=caption) for image in images]}, step=step)
+                images = pipeline(
+                    [text] * PHOTO_COUNT, num_inference_steps=50, guidance_scale=guidance_scale, width=width, height=height
+                ).images
+                caption = "scale: " + str(guidance_scale)
+                label = caption + ", " + text[0:160]
+                wandb.log({label: [wandb.Image(image, caption=caption) for image in images]}, step=step)
 
 
 def main(args):
@@ -845,18 +931,37 @@ def main(args):
     if not args.train_text_encoder:
         text_encoder.requires_grad_(False)
 
+    if args.enable_vae_tiling:
+        vae.enable_tiling()
+
+    # if args.enable_attention_slicing:
+    #    unet.set_attention_slice(slice_size)
+
+    if args.channels_last:
+        unet.to(memory_format=torch.channels_last)
+
+
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
             import xformers
+            from xformers.ops import MemoryEfficientAttentionFlashAttentionOp
+
 
             xformers_version = version.parse(xformers.__version__)
             if xformers_version == version.parse("0.0.16"):
                 logger.warn(
                     "xFormers 0.0.16 cannot be used for training in some GPUs. If you observe problems during training, please update xFormers to at least 0.0.17. See https://huggingface.co/docs/diffusers/main/en/optimization/xformers for more details."
                 )
-            unet.enable_xformers_memory_efficient_attention()
+            if args.flash_attention:
+                unet.enable_xformers_memory_efficient_attention(attention_op=MemoryEfficientAttentionFlashAttentionOp)
+            else:
+                unet.enable_xformers_memory_efficient_attention()
+
+            if args.enable_xformers_vae:
+                vae.enable_xformers_memory_efficient_attention(attention_op=None)
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
+
 
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
@@ -1027,15 +1132,25 @@ def main(args):
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
+
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
 
+    # only swap to eval once for performance
+    text_off = False
+
+
     for epoch in range(first_epoch, args.num_train_epochs):
-        unet.train()
         if args.train_text_encoder:
             text_encoder.train()
+
         for step, batch in enumerate(train_dataloader):
+            if step > args.stop_text and args.text_off is False:
+                text_encoder.requires_grad_(False)
+                text_encoder.eval()
+                text_off = True
+
             # Skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
@@ -1049,7 +1164,15 @@ def main(args):
 
                 # Sample noise that we'll add to the latents
                 if args.pink_noise:
-                    noise = offset_gamma_noise(latents)
+                    noise = make_pink_noise(latents)
+                elif args.gamma_pink_noise:
+                    noise = gamma_pink_noise(latents)
+                elif args.offset_noise:
+                    noise = offset_noise(latents)
+                elif args.gamma_offset_noise:
+                    noise = gamma_offset_noise(latents)
+                elif args.pyramid_noise:
+                    noise = pyramid_noise_like(x, discount=0.8)
                 else:
                     noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
@@ -1125,8 +1248,9 @@ def main(args):
                 if args.save_model_every_n_steps != None and (global_step % args.save_model_every_n_steps) == 0:
                     save_model(accelerator, unet, text_encoder, args, global_step)
 
-                if args.sample_model_every_n_steps != None and (global_step % args.sample_model_every_n_steps) == 0:
-                    sample_model(accelerator, unet, text_encoder, args, global_step)
+                if args.sample_model_every_n_steps != None:
+                    if (global_step % args.sample_model_every_n_steps) == 0 or global_step == 0:
+                        sample_model(accelerator, unet, text_encoder, vae, args, global_step)
 
         accelerator.wait_for_everyone()
 
