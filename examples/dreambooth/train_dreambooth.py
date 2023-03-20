@@ -68,11 +68,10 @@ prompts_with_size_contrast = [
         ]
 
 prompts_with_size = [
-        {"prompt": "good wave", "size": (768, 768)},
-        {"prompt": "normal wave", "size": (768, 768)},
         {"prompt": "bad wave", "size": (768, 768)},
         {"prompt": "high aesthetic", "size": (768, 768)},
         {"prompt": "super image", "size": (702, 884)},
+        {"prompt": "image", "size": (702, 884)},
         {"prompt": "super image", "negativePrompt": "cropped image", "size": (1024, 768)},
         {"prompt": "high aesthetic; super image", "negativePrompt": "cropped", "size": (768, 1024)},
         {"prompt": "high aesthetic; super image; A photo of Obama at a Diner with Anthony Bourdain; Black and White Photo", "negativePrompt": "image; cropped", "size": (768, 1024)},
@@ -206,6 +205,40 @@ def gamma_offset_noise(latents):
     # g2 is the proportion to shift the noise
     noise = torch.randn_like(latents, device=latents.device)
     return torch.randn_like(latents) + g2 * torch.randn(latents.shape[0], latents.shape[1], 1, 1)
+
+
+# Generate the high-frequency noise
+def high_frequency_noise(size, freq_multiplier=10):
+    x = torch.linspace(0, 1, size)
+    y = torch.linspace(0, 1, size)
+    X, Y = torch.meshgrid(x, y)
+    Z = torch.sin(freq_multiplier * 2 * np.pi * X) * torch.cos(freq_multiplier * 2 * np.pi * Y)
+    return Z
+
+def high_noise(latents):
+    print("noise")
+    print(latents.shape)
+    shape = latents.shape
+    size = shape
+    # Create the noise for each channel
+    freq_multiplier = 50
+    noise_r = high_frequency_noise(size, freq_multiplier)
+    noise_g = high_frequency_noise(size, freq_multiplier)
+    noise_b = high_frequency_noise(size, freq_multiplier)
+
+    # Combine the channels
+    noise = torch.stack([noise_r, noise_g, noise_b]).unsqueeze(0)
+
+    DISCOUNT_HIGH = 0.08
+    return torch.randn_like(latents) + DISCOUNT_HIGH * noise
+
+def hi_lo_noise(latents):
+    flip  = torch.rand()
+    if flip < 0.1:
+        return offset_noise(latents)
+
+    if flip > 0.9:
+        return high_noise(latents)
 
 def offset_noise(latents):
     return torch.randn_like(latents) + 0.08 * torch.randn(latents.shape[0], latents.shape[1], 1, 1)
@@ -428,6 +461,18 @@ def parse_args(input_args=None):
             help="Initial learning rate (after the potential warmup period) to use.",
             )
     parser.add_argument(
+            "--step_size_up",
+            type=float,
+            default=1000,
+            help="step size up for cyclical LR"
+    )
+    parser.add_argument(
+            "--step_size_down",
+            type=float,
+            default=1000,
+            help="step size down for cyclical LR"
+    )
+    parser.add_argument(
             "--scale_lr",
             action="store_true",
             default=False,
@@ -566,6 +611,7 @@ def parse_args(input_args=None):
     parser.add_argument("--gamma_offset_noise", type=bool, default=False)
     parser.add_argument("--pyramid_noise", type=bool, default=False)
     parser.add_argument("--offset_noise", type=bool, default=False)
+    parser.add_argument("--hi_low_noise", type=bool, default=False)
     parser.add_argument("--gamma_pink_noise", type=bool, default=False)
 
     if input_args is not None:
@@ -872,7 +918,7 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                         [text] * PHOTO_COUNT, negative_prompt=negative_prompt, num_inference_steps=50, guidance_scale=guidance_scale, width=width, height=height
                         ).images
                 caption = "scale: " + str(guidance_scale)
-                label = caption + ", " + text[0:160]
+                label = caption + ", " + text[0:160] + "neg: " + negative_prompt[0:20]
                 wandb.log({label: [ wandb.Image(image, caption=caption) for image in images ]}, step=step)
 
 
@@ -1158,14 +1204,19 @@ def main(args):
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
+    total_steps = args.max_train_steps * args.gradient_accumulation_steps
+
     if args.lr_scheduler == "polynomial":
-        lr_scheduler = get_polynomial_decay_schedule_with_warmup(optimizer, args.lr_warmup_steps, args.max_train_steps, lr_end=args.lr_end, power=args.lr_power, last_epoch=-1)
+        lr_scheduler = get_polynomial_decay_schedule_with_warmup(optimizer, args.lr_warmup_steps, args.total_steps, lr_end=args.lr_end, power=args.lr_power, last_epoch=-1)
+    elif args.lr_scheduler == "cyclical":
+        clr_fn = lambda x: 1/(5**(x*0.0001))
+        lr_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.lr_end, max_lr=args.learning_rate, step_size_up=args.step_size_up, step_size_down=args_step_size_up, scale_mode='iterations')
     else:
         lr_scheduler = get_scheduler(
                 args.lr_scheduler,
                 optimizer=optimizer,
                 num_warmup_steps=args.lr_warmup_steps * args.gradient_accumulation_steps,
-                num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
+                num_training_steps=total_steps,
                 num_cycles=args.lr_num_cycles,
                 power=args.lr_power,
                 )
@@ -1281,6 +1332,8 @@ def main(args):
                     noise = gamma_pink_noise(latents)
                 elif args.offset_noise:
                     noise = offset_noise(latents)
+                elif args.hi_lo_noise:
+                    noise = hi_low_noise(latents)
                 elif args.gamma_offset_noise:
                     noise = gamma_offset_noise(latents)
                 elif args.pyramid_noise:
