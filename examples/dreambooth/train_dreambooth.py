@@ -39,6 +39,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
+import kornia
 
 
 import diffusers
@@ -208,12 +209,35 @@ def gamma_offset_noise(latents):
     return torch.randn_like(latents) + g2 * torch.randn(latents.shape[0], latents.shape[1], 1, 1)
 
 
-def create_checkerboard(height, width, block_size):
+
+def create_checkerboard_pixels(pixel_w, pixel_h, block_size):
+    # Compute the checkerboard grid size and block size in pixels
+    grid_w = (pixel_w + block_size // 2) // block_size
+    grid_h = (pixel_h + block_size // 2) // block_size
+    pixel_block_size = max(1, block_size // 2)
+
+    # Compute the dimensions of the output grid and checkerboard tiles
+    output_h, output_w = grid_h * block_size, grid_w * block_size
+    tile_h, tile_w = 2 * pixel_block_size, 2 * pixel_block_size
+
+    # Create a checkerboard pattern using small tiles
     pattern = torch.tensor([[1., -1.], [-1., 1.]])
-    grid_height, grid_width = height // block_size, width // block_size
-    checkerboard = pattern.view(1, 2, 2).repeat(1, grid_height, grid_width)
-    checkerboard = checkerboard[:, :height, :width]
-    return checkerboard
+    tile = pattern.view(1, 2, 2).repeat(1, pixel_block_size, pixel_block_size)
+    tile = F.interpolate(tile.unsqueeze(0), size=(tile_h, tile_w), mode='bilinear').squeeze()
+
+    # Repeat the pattern to create the checkerboard grid
+    checkerboard = tile.repeat(grid_h, grid_w)
+    checkerboard = checkerboard[:pixel_h, :pixel_w]
+
+    # Apply antialiasing to the checkerboard grid
+    checkerboard = F.interpolate(checkerboard.unsqueeze(0).unsqueeze(0), size=(output_h, output_w), mode='bilinear').squeeze()
+
+    # Apply a half cell offset
+    row_offset = block_size // 2
+    col_offset = block_size // 2
+    checkerboard = torch.roll(checkerboard, shifts=(row_offset, col_offset), dims=(1, 2))
+
+    return checkerboard.unsqueeze(0)
 
 def rotate_3d_and_project(checkerboard, angle, padding_mode='zeros'):
     height, width = checkerboard.shape[-2:]
@@ -243,24 +267,43 @@ def random_high_freq(latents):
     B, C, H, W = latents.shape
     output = torch.zeros_like(latents)
 
+    print("B, C, H, W")
+    print(B, C,  H, W)
+
     for i in range(B):
         for j in range(C):
             # Create checkerboard
             random_cell_size = random.randint(1, 5)
-            checkerboard = create_checkerboard(H, W, random_cell_size)
+            print(H, W, random_cell_size)
+
+            checkerboard = create_checkerboard_pixels(H, W, random_cell_size)
+            print("checkerboard.shape")
+            print(checkerboard.shape)
 
             # Apply random rotation
             random_angle = random.uniform(0, 360)
             rotated_checkerboard = rotate_3d_and_project(checkerboard, random_angle)
+            print("rotated_checkerboard.shape")
+            print(rotated_checkerboard.shape)
+            # Resize the rotated checkerboard to match the size of latents
+            resized_checkerboard = F.interpolate(rotated_checkerboard.unsqueeze(0), size=(H, W), mode='bilinear').squeeze()
+            print("rotated_checkerboard.shape")
+            print(rotated_checkerboard.shape)
 
             # Assign the rotated checkerboard to the output tensor
             output[i, j] = rotated_checkerboard.squeeze()
 
+    print(output.shape)
     return output
 
 DISCOUNT_HIGH = 0.08
 DISCOUNT_LOW = 0.08 
+
+LOW_FLIP = 0.05
+HIGH_FLIP = 0.95
+
 def high_noise(latents):
+    print("high noise")
     return torch.randn_like(latents) + DISCOUNT_HIGH * random_high_freq(latents)
 
 
@@ -270,9 +313,9 @@ def offset_noise(latents):
 
 def hi_lo_noise(latents):
     flip  = random.random()
-    if flip < 0.05:
+    if flip < LOW_FLIP:
         return offset_noise(latents)
-    elif flip > 0.95:
+    elif flip < LOW_FLIP + HIGH_FLIP:
         return high_noise(latents)
     else:
         return torch.randn_like(latents)
