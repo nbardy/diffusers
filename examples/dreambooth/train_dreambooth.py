@@ -22,6 +22,7 @@ import os
 import warnings
 from pathlib import Path
 from typing import Optional
+import random
 
 import accelerate
 import torch
@@ -207,41 +208,74 @@ def gamma_offset_noise(latents):
     return torch.randn_like(latents) + g2 * torch.randn(latents.shape[0], latents.shape[1], 1, 1)
 
 
-# Generate the high-frequency noise
-def high_frequency_noise(size, freq_multiplier=10):
-    x = torch.linspace(0, 1, size)
-    y = torch.linspace(0, 1, size)
-    X, Y = torch.meshgrid(x, y)
-    Z = torch.sin(freq_multiplier * 2 * np.pi * X) * torch.cos(freq_multiplier * 2 * np.pi * Y)
-    return Z
+def create_checkerboard(height, width, block_size):
+    pattern = torch.tensor([[1., -1.], [-1., 1.]])
+    grid_height, grid_width = height // block_size, width // block_size
+    checkerboard = pattern.view(1, 2, 2).repeat(1, grid_height, grid_width)
+    checkerboard = checkerboard[:, :height, :width]
+    return checkerboard
 
+def rotate_3d_and_project(checkerboard, angle, padding_mode='zeros'):
+    height, width = checkerboard.shape[-2:]
+    device = checkerboard.device
+
+    # Create a 3x3 rotation matrix around the Z-axis
+    angle_rad = torch.tensor(angle * (3.14159265 / 180.0), dtype=torch.float32, device=device)
+    cos_angle, sin_angle = torch.cos(angle_rad), torch.sin(angle_rad)
+    rotation_matrix = torch.tensor([[cos_angle, -sin_angle, 0],
+                                    [sin_angle, cos_angle, 0],
+                                    [0, 0, 1]], device=device).unsqueeze(0)
+
+    # Apply the rotation
+    rotated_2d = kornia.geometry.transform.warp_perspective(checkerboard.unsqueeze(0), rotation_matrix, (height, width), padding_mode="reflection")
+
+    # Anti-alias and pad the image
+    padding = torch.nn.ReflectionPad2d(1)
+    if padding_mode == 'zeros':
+        padding = torch.nn.ZeroPad2d(1)
+
+    rotated_2d_padded = padding(rotated_2d)
+    rotated_2d_aa = kornia.filters.box_blur(rotated_2d_padded, (3, 3))
+
+    return rotated_2d_aa.squeeze(0)
+
+def random_high_freq(latents):
+    B, C, H, W = latents.shape
+    output = torch.zeros_like(latents)
+
+    for i in range(B):
+        for j in range(C):
+            # Create checkerboard
+            random_cell_size = random.randint(1, 5)
+            checkerboard = create_checkerboard(H, W, random_cell_size)
+
+            # Apply random rotation
+            random_angle = random.uniform(0, 360)
+            rotated_checkerboard = rotate_3d_and_project(checkerboard, random_angle)
+
+            # Assign the rotated checkerboard to the output tensor
+            output[i, j] = rotated_checkerboard.squeeze()
+
+    return output
+
+DISCOUNT_HIGH = 0.08
+DISCOUNT_LOW = 0.08 
 def high_noise(latents):
-    print("noise")
-    print(latents.shape)
-    shape = latents.shape
-    size = shape
-    # Create the noise for each channel
-    freq_multiplier = 50
-    noise_r = high_frequency_noise(size, freq_multiplier)
-    noise_g = high_frequency_noise(size, freq_multiplier)
-    noise_b = high_frequency_noise(size, freq_multiplier)
+    return torch.randn_like(latents) + DISCOUNT_HIGH * random_high_freq(latents)
 
-    # Combine the channels
-    noise = torch.stack([noise_r, noise_g, noise_b]).unsqueeze(0)
 
-    DISCOUNT_HIGH = 0.08
-    return torch.randn_like(latents) + DISCOUNT_HIGH * noise
+# low noise
+def offset_noise(latents):
+    return torch.randn_like(latents) + DISCOUNT_LOW * torch.randn(latents.shape[0], latents.shape[1], 1, 1,device=latents.device)
 
 def hi_lo_noise(latents):
-    flip  = torch.rand()
-    if flip < 0.1:
+    flip  = random.random()
+    if flip < 0.05:
         return offset_noise(latents)
-
-    if flip > 0.9:
+    elif flip > 0.95:
         return high_noise(latents)
-
-def offset_noise(latents):
-    return torch.randn_like(latents) + 0.08 * torch.randn(latents.shape[0], latents.shape[1], 1, 1)
+    else:
+        return torch.randn_like(latents)
 
 
 def gamma_pink_noise(latents):
@@ -611,7 +645,7 @@ def parse_args(input_args=None):
     parser.add_argument("--gamma_offset_noise", type=bool, default=False)
     parser.add_argument("--pyramid_noise", type=bool, default=False)
     parser.add_argument("--offset_noise", type=bool, default=False)
-    parser.add_argument("--hi_low_noise", type=bool, default=False)
+    parser.add_argument("--hi_lo_noise", type=bool, default=False)
     parser.add_argument("--gamma_pink_noise", type=bool, default=False)
 
     if input_args is not None:
@@ -1207,7 +1241,7 @@ def main(args):
     total_steps = args.max_train_steps * args.gradient_accumulation_steps
 
     if args.lr_scheduler == "polynomial":
-        lr_scheduler = get_polynomial_decay_schedule_with_warmup(optimizer, args.lr_warmup_steps, args.total_steps, lr_end=args.lr_end, power=args.lr_power, last_epoch=-1)
+        lr_scheduler = get_polynomial_decay_schedule_with_warmup(optimizer, args.lr_warmup_steps, total_steps, lr_end=args.lr_end, power=args.lr_power, last_epoch=-1)
     elif args.lr_scheduler == "cyclical":
         clr_fn = lambda x: 1/(5**(x*0.0001))
         lr_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.lr_end, max_lr=args.learning_rate, step_size_up=args.step_size_up, step_size_down=args_step_size_up, scale_mode='iterations')
@@ -1333,7 +1367,7 @@ def main(args):
                 elif args.offset_noise:
                     noise = offset_noise(latents)
                 elif args.hi_lo_noise:
-                    noise = hi_low_noise(latents)
+                    noise = hi_lo_noise(latents)
                 elif args.gamma_offset_noise:
                     noise = gamma_offset_noise(latents)
                 elif args.pyramid_noise:
