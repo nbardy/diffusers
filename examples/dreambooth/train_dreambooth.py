@@ -70,10 +70,12 @@ prompts_with_size_contrast = [
         ]
 
 prompts_with_size = [
-        {"prompt": "bad wave", "size": (768, 768)},
+        {"prompt": "super breaking wave, super perfect wave shape, super wave detail", "negativePrompt": "bad wave, bad wave shape, bad wave excitement", "size": (768, 768)},
         {"prompt": "high aesthetic", "size": (768, 768)},
         {"prompt": "super image", "size": (702, 884)},
         {"prompt": "image", "size": (702, 884)},
+        {"prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner", "size": (1024, 884)},
+        {"prompt": "portrait of obama; super image", "size": (702, 884)},
         {"prompt": "super image", "negativePrompt": "cropped image", "size": (1024, 768)},
         {"prompt": "high aesthetic; super image", "negativePrompt": "cropped", "size": (768, 1024)},
         {"prompt": "high aesthetic; super image; A photo of Obama at a Diner with Anthony Bourdain; Black and White Photo", "negativePrompt": "image; cropped", "size": (768, 1024)},
@@ -235,7 +237,7 @@ def create_checkerboard_pixels(pixel_w, pixel_h, block_size):
     # Apply a half cell offset
     row_offset = block_size // 2
     col_offset = block_size // 2
-    checkerboard = torch.roll(checkerboard, shifts=(row_offset, col_offset), dims=(1, 2))
+    checkerboard = torch.roll(checkerboard, shifts=(row_offset, col_offset), dims=(0, 1))
 
     return checkerboard.unsqueeze(0)
 
@@ -267,31 +269,22 @@ def random_high_freq(latents):
     B, C, H, W = latents.shape
     output = torch.zeros_like(latents)
 
-    print("B, C, H, W")
-    print(B, C,  H, W)
-
     for i in range(B):
         for j in range(C):
             # Create checkerboard
             random_cell_size = random.randint(1, 5)
-            print(H, W, random_cell_size)
 
             checkerboard = create_checkerboard_pixels(H, W, random_cell_size)
-            print("checkerboard.shape")
-            print(checkerboard.shape)
 
             # Apply random rotation
             random_angle = random.uniform(0, 360)
             rotated_checkerboard = rotate_3d_and_project(checkerboard, random_angle)
-            print("rotated_checkerboard.shape")
-            print(rotated_checkerboard.shape)
+
             # Resize the rotated checkerboard to match the size of latents
             resized_checkerboard = F.interpolate(rotated_checkerboard.unsqueeze(0), size=(H, W), mode='bilinear').squeeze()
-            print("rotated_checkerboard.shape")
-            print(rotated_checkerboard.shape)
 
             # Assign the rotated checkerboard to the output tensor
-            output[i, j] = rotated_checkerboard.squeeze()
+            output[i, j] = resized_checkerboard.squeeze()
 
     print(output.shape)
     return output
@@ -300,10 +293,9 @@ DISCOUNT_HIGH = 0.08
 DISCOUNT_LOW = 0.08 
 
 LOW_FLIP = 0.05
-HIGH_FLIP = 0.95
+HIGH_FLIP = 0.05
 
 def high_noise(latents):
-    print("high noise")
     return torch.randn_like(latents) + DISCOUNT_HIGH * random_high_freq(latents)
 
 
@@ -995,8 +987,10 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                         [text] * PHOTO_COUNT, negative_prompt=negative_prompt, num_inference_steps=50, guidance_scale=guidance_scale, width=width, height=height
                         ).images
                 caption = "scale: " + str(guidance_scale)
-                label = caption + ", " + text[0:160] + "neg: " + negative_prompt[0:20]
-                wandb.log({label: [ wandb.Image(image, caption=caption) for image in images ]}, step=step)
+                label_negative = "None" if negative_prompt is None else str(negative_prompt[0:20])
+
+                label = caption + ", " + text[0:160] + "neg: " + label_negative
+                wandb.log({label: [ wandb.Image(image, caption=label) for image in images ]}, step=step)
 
 
 def main(args):
@@ -1287,7 +1281,7 @@ def main(args):
         lr_scheduler = get_polynomial_decay_schedule_with_warmup(optimizer, args.lr_warmup_steps, total_steps, lr_end=args.lr_end, power=args.lr_power, last_epoch=-1)
     elif args.lr_scheduler == "cyclical":
         clr_fn = lambda x: 1/(5**(x*0.0001))
-        lr_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.lr_end, max_lr=args.learning_rate, step_size_up=args.step_size_up, step_size_down=args_step_size_up, scale_mode='iterations')
+        lr_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.lr_end, max_lr=args.learning_rate, step_size_up=args.step_size_up, step_size_down=args.step_size_down, scale_mode='iterations')
     else:
         lr_scheduler = get_scheduler(
                 args.lr_scheduler,
@@ -1491,7 +1485,7 @@ def main(args):
                     save_model(accelerator, unet, text_encoder, args, global_step)
 
                 if args.sample_model_every_n_steps != None:
-                    if (global_step % args.sample_model_every_n_steps) == 0 or global_step == 0:
+                    if (global_step % args.sample_model_every_n_steps) == 0 or global_step == 1:
                         sample_model(accelerator, unet, text_encoder, vae, args, global_step)
 
         accelerator.wait_for_everyone()
