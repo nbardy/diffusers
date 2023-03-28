@@ -1527,6 +1527,7 @@ def main(args):
                 # if the result has less than five, pad with zeros
                 def get_instruct_hidden_states(batch):
                     pixel_values = batch["pixel_values"]
+                    all_states = []
                     for i, pixels in enumerate(pixel_values):
                         # slice only the ith element
                         input_ids = batch["input_ids"][i]
@@ -1555,7 +1556,8 @@ def main(args):
                                 dim=1,
                             )
 
-                            return instruct_hidden_states
+                            all_states.append(instruct_hidden_states)
+
                         elif instruct == "img2img":
                             image_inputs = clip_processor(images=image, return_tensors="pt")
                             image_embedding = clip_model.get_image_features(**image_inputs.to(device))
@@ -1573,7 +1575,8 @@ def main(args):
                                 dim=1,
                             )
 
-                            return instruct_hidden_states
+                            all_states.append(instruct_hidden_states)
+
                         elif instruct == "mix":
                             image_input = clip_processor(images=image, return_tensors="pt")
                             image_embedding = clip_model.get_image_features(**image_input.to(device))
@@ -1617,7 +1620,9 @@ def main(args):
                                 all,
                                 dim=1,
                             )
-                            return instruct_hidden_states
+                            all.append(instruct_hidden_states)
+
+                    return torch.cat(all_states, dim=0)
 
                 encoder_hidden_states = get_instruct_hidden_states(batch)
 
