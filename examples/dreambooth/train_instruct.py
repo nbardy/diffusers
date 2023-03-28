@@ -1511,7 +1511,6 @@ def main(args):
 
                 # aux_image_index = faiss.IndexFlatL2(model.config.projection_dim)
                 # aux_text_index = faiss.IndexFlatL2(model.config.projection_dim)
-                instruct = get_random_instruct()
 
                 # item
 
@@ -1524,63 +1523,101 @@ def main(args):
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
+                # Get a set of five embeddings
+                # if the result has less than five, pad with zeros
                 def get_instruct_hidden_states(batch):
-                    instance_image = batch["instance_images"]
-                    instruct = get_random_instruct()
+                    pixel_values = batch["pixel_values"]
+                    for i, pixels in enumerate(pixel_values):
+                        # slice only the ith element
+                        input_ids = batch["input_ids"][i]
+                        input_ids = [input_ids]
 
-                    prompt = instructions_detailed[instruct]["prompt"]
-                    instruct_prompt_hidden_states = text_encoder(prompt)[0]
+                        instruct = get_random_instruct()
 
-                    if instruct == "txt2img":
-                        text_hidden_states = text_encoder(batch["input_ids"])[0]
+                        prompt = instructions_detailed[instruct]["prompt"]
+                        # preprocess the prompt
+                        prompt = clip_processor(text=prompt, return_tensors="pt")
+                        instruct_prompt_hidden_states = text_encoder(prompt)[0]
 
-                        instruct_hidden_states = torch.cat([instruct_prompt_hidden_states, text_hidden_states], dim=1)
+                        if instruct == "txt2img":
+                            text_hidden_states = text_encoder(input_ids)[0]
 
-                        return instruct_hidden_states
-                    elif instruct == "img2img":
-                        image_inputs = clip_processor(images=image, return_tensors="pt")
-                        image_embedding = clip_model.get_image_features(**image_inputs.to(device))
+                            zeros = torch.zeros_like(instruct_prompt_hidden_states)
+                            # stack the hidden states with padding zeros
+                            instruct_hidden_states = torch.cat(
+                                [
+                                    instruct_prompt_hidden_states,
+                                    text_hidden_states,
+                                    zeros,
+                                    zeros,
+                                    zeros,
+                                ],
+                                dim=1,
+                            )
 
-                        instruct_hidden_states = torch.cat([instruct_prompt_hidden_states, image_embedding], dim=1)
+                            return instruct_hidden_states
+                        elif instruct == "img2img":
+                            image_inputs = clip_processor(images=image, return_tensors="pt")
+                            image_embedding = clip_model.get_image_features(**image_inputs.to(device))
 
-                        return instruct_hidden_states
-                    elif instruct == "mix":
-                        image_input = clip_processor(images=image, return_tensors="pt")
-                        image_embedding = clip_model.get_image_features(**image_input.to(device))
+                            zeros = torch.zeros_like(instruct_prompt_hidden_states)
+                            # stack the hidden states with padding zeros
+                            instruct_hidden_states = torch.cat(
+                                [
+                                    instruct_prompt_hidden_states,
+                                    image_embedding,
+                                    zeros,
+                                    zeros,
+                                    zeros,
+                                ],
+                                dim=1,
+                            )
 
-                        # We want to use a random amount between 2-5
-                        amount = random.randint(2, 5)
-                        # Now assign each to text or image so make each a random binary
-                        text_or_image = torch.randint(0, 2, (amount,)).to(device)
-                        num_text_to_search = torch.sum(text_or_image == 0)
-                        num_image_to_search = torch.sum(text_or_image == 1)
+                            return instruct_hidden_states
+                        elif instruct == "mix":
+                            image_input = clip_processor(images=image, return_tensors="pt")
+                            image_embedding = clip_model.get_image_features(**image_input.to(device))
 
-                        # aux_image_index.add(np.vstack(aux_image_embeddings))
-                        # aux_text_index.add(np.vstack(aux_text_embeddings))
-                        # Take instead of using the image or text embedding use the five nearest neighbors
-                        # and embed all
-                        # the aux_image_index is a faiss index
-                        # Query aux_image_index
-                        # Get 3 nearest neighbors
-                        _, image_neighbors = aux_image_index.search(image_embedding.cpu().numpy(), num_image_to_search)
-                        # Get 2 nearest text neighbors
-                        _, text_neighbors = aux_text_index.search(text_hidden_states.cpu().numpy(), num_text_to_search)
-                        # Get the embeddings of the neighbors
-                        image_neighbors = torch.tensor(image_neighbors).to(device)
-                        text_neighbors = torch.tensor(text_neighbors).to(device)
+                            # We want to use a random amount between 2-5
+                            amount = random.randint(2, 5)
+                            # Now assign each to text or image so make each a random binary
+                            text_or_image = torch.randint(0, 2, (amount,)).to(device)
+                            num_text_to_search = torch.sum(text_or_image == 0)
+                            num_image_to_search = torch.sum(text_or_image == 1)
+                            zero_count = 5 - amount
 
-                        # stack
-                        instruct_hidden_states = torch.cat(
-                            [
+                            # aux_image_index.add(np.vstack(aux_image_embeddings))
+                            # aux_text_index.add(np.vstack(aux_text_embeddings))
+                            # Take instead of using the image or text embedding use the five nearest neighbors
+                            # and embed all
+                            # the aux_image_index is a faiss index
+                            # Query aux_image_index
+                            # Get 3 nearest neighbors
+                            _, image_neighbors = aux_image_index.search(
+                                image_embedding.cpu().numpy(), num_image_to_search
+                            )
+                            # Get 2 nearest text neighbors
+                            _, text_neighbors = aux_text_index.search(
+                                text_hidden_states.cpu().numpy(), num_text_to_search
+                            )
+                            # Get the embeddings of the neighbors
+                            image_neighbors = torch.tensor(image_neighbors).to(device)
+                            text_neighbors = torch.tensor(text_neighbors).to(device)
+
+                            all = [
                                 instruct_prompt_hidden_states,
-                                text_hidden_states,
-                                image_embedding,
                                 image_neighbors,
                                 text_neighbors,
-                            ],
-                            dim=1,
-                        )
-                        return instruct_hidden_states
+                            ]
+                            # append zeros
+                            for i in range(zero_count):
+                                all.append(torch.zeros_like(instruct_prompt_hidden_states))
+                            # stack
+                            instruct_hidden_states = torch.cat(
+                                all,
+                                dim=1,
+                            )
+                            return instruct_hidden_states
 
                 encoder_hidden_states = get_instruct_hidden_states(batch)
 
