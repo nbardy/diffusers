@@ -167,8 +167,8 @@ image_files = os.listdir(directory)
 pre_compute(directory, image_files, instructions)
 
 # Create separate FAISS indices for images and texts
-aux_image_index = faiss.IndexFlatL2(model.config.projection_dim)
-aux_text_index = faiss.IndexFlatL2(model.config.projection_dim)
+aux_image_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
+aux_text_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
 
 # Add embeddings to the indices
 aux_image_index.add(np.vstack(aux_image_embeddings))
@@ -1510,8 +1510,8 @@ def main(args):
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
 
-                # aux_image_index = faiss.IndexFlatL2(model.config.projection_dim)
-                # aux_text_index = faiss.IndexFlatL2(model.config.projection_dim)
+                # aux_image_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
+                # aux_text_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
 
                 # item
 
