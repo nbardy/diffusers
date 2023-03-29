@@ -4,6 +4,7 @@ import requests
 from PIL import Image
 from transformers import AutoProcessor, Blip2ForConditionalGeneration
 import torch
+import io
 
 # Load the dataset
 wikiart_dataset = load_dataset("huggan/wikiart")
@@ -14,8 +15,10 @@ def download_image(image_id):
     image_data = wikiart_dataset["train"][image_id]["image"]
 
     # Convert the image data to a PIL Image
-    image = Image.open(io.BytesIO(image_data)).convert("RGB")
-    return image
+
+    print("image_data")
+    print(image_data)
+    return image_data
 
 
 # Set up the BLIP-2 model
@@ -77,5 +80,6 @@ def convert_expert_conversation_data_to_labels(expert_labels_critique):
 
 def get_image_ids(num_images):
     # Get num_images random unique image IDs from the huggan/wikiart dataset
+    import random
     image_ids = random.sample(range(len(wikiart_dataset["train"])), num_images)
     return image_ids

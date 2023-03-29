@@ -94,28 +94,19 @@ def pre_compute(directory, image_files, instructions):
         text_inputs = clip_processor(text=[text], return_tensors="pt", padding=True, truncation=True)
 
 
-prompts_with_size_contrast = [
-    {"prompt": "Solid White Ice", "size": (768, 768)},
-    {"prompt": "Solid Black Mountain", "size": (768, 768)},
-    {
-        "prompt": "Incredibly Dark Alley",
-        "size": (768, 768),
-    },
-    {
-        "prompt": "Incredibly Dark Cave",
-        "size": (768, 768),
-    },
-    {"prompt": "Shadowy Portal lit by a dim torch", "size": (1024, 768)},
-    {"prompt": "Dramatic Breaking wave", "size": (1024, 768)},
-]
 
 prompts_with_size = [
     {
-        "prompt": "super breaking wave, super perfect wave shape, super wave detail",
-        "negativePrompt": "bad wave, bad wave shape, bad wave excitement",
-        "size": (768, 768),
+        "prompt": "super breaking wave, super perfect wave shape, super wave detail, super image ",
+        "negativePrompt": "bad wave, bad wave shape, bad wave ",
+        "size": (1014, 768),
     },
-    {"prompt": "high aesthetic", "size": (768, 768)},
+    {"prompt": "a cute bird", "size": (768, 768)},
+    {"prompt": "a cute bird, high aesthetic", "size": (768, 768)},
+    {"prompt": "a cute bird, high aesthetic; super image", "size": (768, 768)},
+    {"prompt": "A women smiling", "size": (768, 1024)},
+    {"prompt": "A women smiling; super image", "size": (768, 1024)},
+    {"prompt": "A women smiling; super image, high aesthetic", "size": (768, 1024)},
     {"prompt": "super image", "size": (702, 884)},
     {"prompt": "image", "size": (702, 884)},
     {
@@ -130,29 +121,6 @@ prompts_with_size = [
         "negativePrompt": "image; cropped",
         "size": (768, 1024),
     },
-    {
-        "prompt": "breaking wave; super form; super shape",
-        "negativePrompt": "cropped, bad, bad wave",
-        "size": (1024, 768),
-    },
-    {
-        "prompt": "breaking wave; super image; super shape",
-        "negativePrompt": "cropped, bad, bad wave",
-        "size": (1024, 768),
-    },
-    {
-        "prompt": "dramatic wave; super image",
-        "negativePrompt": "cropped, bad, bad wave",
-        "size": (1024, 768),
-    },
-    {
-        "prompt": "dramatic wave; super image; super shape; super color; super storm; super spray; super foam",
-        "negativePrompt": "cropped, bad, bad wave; broken form; bad geometry",
-        "size": (1024, 768),
-    },
-    {"prompt": "Stunning example of crystal clear barreling wave", "size": (1024, 768)},
-    {"prompt": "Dramatic Breaking wave, good wave", "size": (1024, 768)},
-    {"prompt": "Dramatic Breaking wave, good wave, high aesthetic", "size": (1024, 768)},
 ]
 
 # Define instructions
@@ -1066,10 +1034,43 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                 height = round_to_nearest_multiple(height, 8)
 
                 if not (negative_prompt is None):
-                    negative_prompt = [negative_prompt] * PHOTO_COUNT
+                    negative_prompt = [negative_prompt]
+
+
+                # Function for organization
+                def get_prompt_emebds():
+                    # TODO: add all tests for each type including mix
+                    instruct = "text2img"
+
+                    instruct_prompt = instructions_detailed[instruct]["prompt"]
+
+                    # preprocess the prompt
+                    instruct_prompt = clip_processor(text=instruct_prompt, return_tensors="pt")
+                    instruct_prompt_hidden_states = instructtext_encoder(prompt)[0]
+
+                    if instruct == "txt2img":
+                        text_ids = clip_processor(text=text, return_tensors="pt")
+                        text_hidden_states = text_encoder(text_ids)[0]
+
+                        zeros = torch.zeros_like(instruct_prompt_hidden_states)
+                        # stack the hidden states with padding zeros
+                        instruct_hidden_states = torch.cat(
+                            [
+                                instruct_prompt_hidden_states,
+                                text_hidden_states,
+                                zeros,
+                                zeros,
+                                zeros,
+                            ],
+                            dim=1,
+                        )
+                        return instuct_hidden_states
+
+                prompt_emebds = get_prompt_embeds()
 
                 images = pipeline(
-                    [text] * PHOTO_COUNT,
+                    prompt_embeds=prompt_embeds,
+                    num_images_per_prompt=PHOTO_COUNT,
                     negative_prompt=negative_prompt,
                     num_inference_steps=50,
                     guidance_scale=guidance_scale,

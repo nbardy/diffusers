@@ -74,16 +74,20 @@ prompts_with_size_contrast = [
     {"prompt": "Dramatic Breaking wave", "size": (1024, 768)},
 ]
 
+
 prompts_with_size = [
     {
-        "prompt": "super breaking wave, super perfect wave shape, super wave detail",
-        "negativePrompt": "bad wave, bad wave shape, bad wave excitement",
-        "size": (1024, 768),
+        "prompt": "super breaking wave, super perfect wave shape, super wave detail, super image ",
+        "negativePrompt": "bad wave, bad wave shape, bad wave ",
+        "size": (1014, 768),
     },
-    {"prompt": "high aesthetic", "size": (768, 768)},
+    {"prompt": "a cute bird", "size": (768, 768)},
+    {"prompt": "a cute bird, high aesthetic", "size": (768, 768)},
+    {"prompt": "a cute bird, high aesthetic; super image", "size": (768, 768)},
+    {"prompt": "A women smiling", "size": (768, 1024)},
+    {"prompt": "A women smiling; super image", "size": (768, 1024)},
+    {"prompt": "A women smiling; super image, high aesthetic", "size": (768, 1024)},
     {"prompt": "super image", "size": (702, 884)},
-    {"prompt": "Shadowy Portal lit by a dim torch", "size": (1024, 768)},
-    {"prompt": "Solid White Ice", "size": (768, 768)},
     {"prompt": "image", "size": (702, 884)},
     {
         "prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner",
@@ -91,30 +95,15 @@ prompts_with_size = [
     },
     {"prompt": "portrait of obama; super image", "size": (702, 884)},
     {"prompt": "super image", "negativePrompt": "cropped image", "size": (1024, 768)},
-    {
-        "prompt": "high aesthetic; super image",
-        "negativePrompt": "cropped",
-        "size": (768, 1024),
-    },
+    {"prompt": "high aesthetic; super image", "negativePrompt": "cropped", "size": (768, 1024)},
     {
         "prompt": "high aesthetic; super image; A photo of Obama at a Diner with Anthony Bourdain; Black and White Photo",
         "negativePrompt": "image; cropped",
         "size": (768, 1024),
     },
-    {"prompt": "Stunning example of crystal clear barreling wave", "size": (1024, 768)},
-    {
-        "prompt": "Stunning example of crystal clear barreling wave; super image",
-        "size": (1024, 768),
-    },
-    {
-        "prompt": "Stunning example of crystal clear barreling wave; super high aesthetic",
-        "size": (1024, 768),
-    },
-    {
-        "prompt": "Dramatic Breaking wave, good wave, high aesthetic; good image",
-        "size": (1024, 768),
-    },
 ]
+
+
 
 
 def get_polynomial_decay_schedule_with_warmup(
