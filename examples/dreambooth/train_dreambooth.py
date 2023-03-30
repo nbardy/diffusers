@@ -48,6 +48,7 @@ from diffusers import (
     DDPMScheduler,
     DiffusionPipeline,
     UNet2DConditionModel,
+    DPMSolverMultistepScheduler,
 )
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
@@ -59,50 +60,103 @@ from torch.distributions import Gamma
 
 from diffusers import StableDiffusionPipeline
 
-prompts_with_size_contrast = [
-    {"prompt": "Solid White Ice", "size": (768, 768)},
-    {"prompt": "Solid Black Mountain", "size": (768, 768)},
-    {
-        "prompt": "Incredibly Dark Alley",
-        "size": (768, 768),
-    },
-    {
-        "prompt": "Incredibly Dark Cave",
-        "size": (768, 768),
-    },
-    {"prompt": "Shadowy Portal lit by a dim torch", "size": (1024, 768)},
-    {"prompt": "Dramatic Breaking wave", "size": (1024, 768)},
-]
-
 
 prompts_with_size = [
     {
-        "prompt": "super breaking wave, super perfect wave shape, super wave detail, super image ",
-        "negativePrompt": "bad wave, bad wave shape, bad wave ",
-        "size": (1014, 768),
+        "prompt": "A dramatic breaking; film; super image", "negativePrompt": "bad wave, bad crop, bad angle, bad lighting, bad glow, center crop, center zoom"}
+        "negativePrompt": "bad wave, bad wave shape, bad wave; bad image; bad crop; bad image; center crop",
+        "size": (1024, 768),
     },
-    {"prompt": "a cute bird", "size": (768, 768)},
-    {"prompt": "a cute bird, high aesthetic", "size": (768, 768)},
-    {"prompt": "a cute bird, high aesthetic; super image", "size": (768, 768)},
-    {"prompt": "A women smiling", "size": (768, 1024)},
+    {
+        "prompt": "Storied Sorrows, A women sits beneath a soft light, sobbing in a chair, dimly lit hotel room; film; super image", "negativePrompt": "bad image, bad crop, bad lighting, bad film, bad angle, misformed person, bad person, bad people",
+        "size": (1024 + 64 * 4, 768 + 3 * 64)
+    },
+    {
+        "prompt": "a cute bird, orange wings; rosetip feathers; super image",
+        "size": (768, 768),
+        "negativePrompt": "bad image"
+    },
+    {
+        "prompt": "a cute bird, orange wings; rosetip feathers; high aesthetic",
+        "size": (768, 768),
+        "negativePrompt": "bad image"
+    },
+    {
+        "prompt": "a cute bird, high aesthetic; super image",
+        "size": (768, 768),
+        "negativePrompt": "bad image"
+    },
+    {
+        "prompt": "A women smiling",
+        "size": (768, 1024),
+        "negativePrompt": "bad image, zoom crop, bad crop"
+    },
     {"prompt": "A women smiling; super image", "size": (768, 1024)},
     {"prompt": "A women smiling; super image, high aesthetic", "size": (768, 1024)},
-    {"prompt": "super image", "size": (702, 884)},
-    {"prompt": "image", "size": (702, 884)},
+    {"prompt": "Stunning potrait of a Liquid Chrome Gravity Sculpture", "size": (768, 1024 + 64 * 4)},
+    {
+        "prompt": "Cyber eye; portrait of a warrior princess; Jeweled Crown; super image; dramatic fisheye",
+        "size": (768, 1024 + 64 * 4),
+        "negativePrompt": "bad image, zoom crop, bad crop"
+    },
+    {"prompt": "super image", "size": (768, 884)},
+    {"prompt": "A cat that looks like a bear; super animal; super image; realistic", "size": (768, 884)},
+    {
+        "prompt": "The end of the world, Nucleur Apocolypse, Starfish on a Beach; super film; super image; realistic",
+        "size": (1024 + 64*3, 884),
+        "negativePrompt": "bad image, bad film, zoom crop, bad crop"
+    },
+    {
+        "prompt": "Barren Scowls; film; super image", "size": (1024 + 64*3, 884),
+        "negativePrompt": "bad image, bad crop"
+    },
+    {
+        "prompt": "A leopard fights a man; film; super realistic", "size": (1024 + 64*3, 884)
+        "negativePrompt": "bad image, bad painting"
+    },
+    {
+        "prompt": "A leopard fights a man; film; realistic",
+        "size": (1024 + 64*3, 884)
+        "negativePrompt": "bad image, bad painting"},
+    {
+        "prompt": "A leopard, a man; film; super leopard",
+        "size": (1024 + 64*3, 884),
+        "negativePrompt": "bad image, bad crop, bad leopard, bad film, bad art",
+    },
+    {
+        "prompt": "A leopard, a man; film; super leopard; super cinema; super camera angle; super image",
+        "size": (1024 + 64*3, 884),
+        "negativePrompt": "bad image, bad crop, bad leopard, bad film, bad art"
+     },
+    {
+        "prompt": "Halls of Space, scifi, digital painting; super painting; super image",
+        "negativePrompt": "bad painting, bad image",
+        "size": (768, 1024)
+    },
     {
         "prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner",
+        "negativePrompt": "bad people, malformed people, misfigured persons",
         "size": (1024, 884),
     },
-    {"prompt": "portrait of obama; super image", "size": (702, 884)},
-    {"prompt": "super image", "negativePrompt": "cropped image", "size": (1024, 768)},
-    {"prompt": "high aesthetic; super image", "negativePrompt": "cropped", "size": (768, 1024)},
+    {
+        "prompt": "portrait of obama; super image; super photo",
+        "size": (702, 884),
+        "negativePrompt": "bad image, bad crop, zoom crop, bad person, bad eyes"
+    },
+    {
+        "prompt": "A dragon, but with a gold fish head; super image",
+        "negativePrompt": "cropped image, bad animal, bad painting, realistic, super realistic ", "size": (1024, 768)},
+    {
+        "prompt": "high aesthetic; super image",
+        "negativePrompt": "cropped",
+        "size": (768, 1024)
+    },
     {
         "prompt": "high aesthetic; super image; A photo of Obama at a Diner with Anthony Bourdain; Black and White Photo",
         "negativePrompt": "image; cropped",
         "size": (768, 1024),
     },
 ]
-
 
 
 
@@ -115,18 +169,10 @@ def get_polynomial_decay_schedule_with_warmup(
     last_epoch=-1,
 ):
     """
-    Create a schedule with a learning rate that decreases as a polynomial decay from the initial lr set in the
-    optimizer to end lr defined by *lr_end*, after a warmup period during which it increases linearly from 0 to the
-    initial lr set in the optimizer.
-    Args:
         optimizer ([`~torch.optim.Optimizer`]):
-            The optimizer for which to schedule the learning rate.
         num_warmup_steps (`int`):
-            The number of steps for the warmup phase.
         num_training_steps (`int`):
-            The total number of training steps.
         lr_end (`float`, *optional*, defaults to 1e-7):
-            The end LR.
         power (`float`, *optional*, defaults to 1.0):
             Power factor.
         last_epoch (`int`, *optional*, defaults to -1):
@@ -150,11 +196,15 @@ def get_polynomial_decay_schedule_with_warmup(
         elif current_step > num_training_steps:
             return lr_end / lr_init  # as LambdaLR multiplies by lr_init
         else:
+            print("Current Step")
+            print("LR End ", lr_end)
             lr_range = lr_init - lr_end
             decay_steps = num_training_steps - num_warmup_steps
             pct_remaining = 1 - (current_step - num_warmup_steps) / decay_steps
             decay = lr_range * pct_remaining**power + lr_end
-            return decay / lr_init  # as LambdaLR multiplies by lr_init
+            lr = decay / lr_init  # as LambdaLR multiplies by lr_init
+
+            return lr
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
 
@@ -543,7 +593,7 @@ def parse_args(input_args=None):
         default=None,
         help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
     )
-    parser.add_argument("--super_image_ratio", type=float, default=0.3),
+    parser.add_argument("--super_image_ratio", type=float, default=1.0),
     parser.add_argument("--super_image_dir", type=str, default=None),
     parser.add_argument(
         "--checkpointing_steps",
@@ -844,8 +894,11 @@ def all_images(image_dir):
     return (
         list(image_path.glob("*.jpg"))
         + list(image_path.glob("*.png"))
+        + list(image_path.glob("*.PNG"))
         + list(image_path.glob("*.webp"))
         + list(image_path.glob("*.jpeg"))
+        + list(image_path.glob("*.JPG"))
+        + list(image_path.glob("*.JPEG"))
     )
 
 
@@ -868,6 +921,7 @@ class DreamBoothDataset(Dataset):
         use_txt_as_label=False,
         class_data_root=None,
         super_image_dir=None,
+        super_image_ratio=None,
     ):
         self.size = size
         self.center_crop = center_crop
@@ -892,6 +946,7 @@ class DreamBoothDataset(Dataset):
         self._length = self.num_instance_images
 
         self.super_image_dir = super_image_dir
+        self.super_image_ratio = super_image_ratio
         if self.super_image_dir:
             self.instance_data_root = Path(super_image_dir)
 
@@ -949,7 +1004,11 @@ class DreamBoothDataset(Dataset):
             return_tensors="pt",
         ).input_ids
 
-        if self.super_image_dir:
+        import random
+
+        r = random.random()
+        ratio = self.super_image_ratio or 1.0
+        if self.super_image_dir and r < ratio:
             path = self.super_images_paths[index % self.num_super_images]
             super_image = Image.open(path)
 
@@ -973,6 +1032,9 @@ class DreamBoothDataset(Dataset):
                 max_length=self.tokenizer.model_max_length,
                 return_tensors="pt",
             ).input_ids
+        else:
+            example["super_images"] = None
+            example["super_image_prompt_ids"] = None
 
         if self.class_data_root:
             class_image = Image.open(
@@ -996,8 +1058,9 @@ def collate_fn(examples, with_prior_preservation=False):
     input_ids = [example["instance_prompt_ids"] for example in examples]
     pixel_values = [example["instance_images"] for example in examples]
 
-    input_ids += [example["super_image_prompt_ids"] for example in examples]
-    pixel_values += [example["super_images"] for example in examples]
+    input_ids += [example["super_image_prompt_ids"] for example in examples if example.get("super_image_prompt_ids") is not None]
+    pixel_values += [example["super_images"] for example in examples if example.get("super_images") is not None]
+
 
     # Concat class and instance examples for prior preservation.
     # We do this to avoid doing two forward passes.
@@ -1078,6 +1141,7 @@ import wandb
 
 PHOTO_COUNT = 2
 
+test_inference_steps = 26
 
 def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
     torch_dtype = torch.float16 if accelerator.device.type == "cuda" else torch.float32
@@ -1096,6 +1160,7 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
         torch_dtype=torch_dtype,
     )
     pipeline.to(accelerator.device)
+    pipeline.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
 
     for prompt in prompts_with_size:
         for guidance_scale in [14]:
@@ -1122,17 +1187,27 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                 images = pipeline(
                     [text] * PHOTO_COUNT,
                     negative_prompt=negative_prompt,
-                    num_inference_steps=50,
+                    num_inference_steps=test_inference_steps,
                     guidance_scale=guidance_scale,
                     width=width,
                     height=height,
                 ).images
-                caption = "scale: " + str(guidance_scale)
+
+
+
                 label_negative = (
                     "None" if negative_prompt is None else str(negative_prompt[0:20])
                 )
 
-                label = caption + ", " + text[0:160] + "neg: " + label_negative
+                # Limit the length of text, label_negative, and guidance_scale
+                label_text = text[0:100]
+                label_negative = label_negative[0:30]
+                label_guidance_scale = str(guidance_scale)
+
+                label = f"{label_text} | neg: {label_negative} | scale: {label_guidance_scale} | steps: {test_inference_steps}"
+
+
+
                 wandb.log(
                     {label: [wandb.Image(image, caption=label) for image in images]},
                     step=step,
@@ -1448,6 +1523,7 @@ def main(args):
         use_filename_as_label=args.use_filename_as_label,
         use_txt_as_label=args.use_txt_as_label,
         super_image_dir=args.super_image_dir,
+        super_image_ratio=args.super_image_ratio,
     )
 
     train_dataloader = torch.utils.data.DataLoader(
