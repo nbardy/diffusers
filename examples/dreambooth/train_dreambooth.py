@@ -49,6 +49,7 @@ from diffusers import (
     DiffusionPipeline,
     UNet2DConditionModel,
     DPMSolverMultistepScheduler,
+    EulerAncestralDiscreteScheduler
 )
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
@@ -63,13 +64,29 @@ from diffusers import StableDiffusionPipeline
 
 prompts_with_size = [
     {
-        "prompt": "A dramatic breaking; film; super image", "negativePrompt": "bad wave, bad crop, bad angle, bad lighting, bad glow, center crop, center zoom"}
+        "prompt": "Wave eruption; Ocean surface; A dramatic breaking; tilt-shift zoom; film; super image",
         "negativePrompt": "bad wave, bad wave shape, bad wave; bad image; bad crop; bad image; center crop",
         "size": (1024, 768),
     },
     {
-        "prompt": "Storied Sorrows, A women sits beneath a soft light, sobbing in a chair, dimly lit hotel room; film; super image", "negativePrompt": "bad image, bad crop, bad lighting, bad film, bad angle, misformed person, bad person, bad people",
-        "size": (1024 + 64 * 4, 768 + 3 * 64)
+        "prompt": "a full body photo of 25 y.o brown tan skinned American woman with glasses, Short Curly hair, wearing gypsy style clothes, modestly clothed, fully clothed, background is in traditional Turkish house, high detailed skin, realistic sunlight lighting, thick thigh, wide hips, visible face pores",
+        "negativePrompt": "deformed iris, deformed pupils, semi-realistic, CGI, 3d, render, sketch, cartoon, drawing, anime, text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, erotic, sexy, nudity, half-naked, half naked, camera flash, oversaturated, hard lighting, diffuser lighting",
+        "size": (768, 1024 + 64 * 2)
+    },
+    {
+        "prompt": "A dramatic wave breaking; film; super image",
+        "negativePrompt": "bad wave, bad wave shape, bad wave; bad image; bad crop; bad image; center crop",
+        "size": (1024, 768),
+    },
+    {
+        "prompt": "A dramatic wave breaking; film; super image",
+        "negativePrompt": "lowres, text, error, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry, ugly, text",
+        "size": (1024, 768),
+    }
+    {
+        "prompt": "Storied Sorrows, A women sits beneath a soft light, sobbing in a chair, dimly lit hotel room; film; super image",
+        "negativePrompt": "bad image, bad crop, bad lighting, bad film, bad angle, misformed person, bad person, bad people",
+        "size": (1024 + 64 * 4, 768 + 3 * 64),
     },
     {
         "prompt": "a cute bird, orange wings; rosetip feathers; super image",
@@ -111,13 +128,15 @@ prompts_with_size = [
         "negativePrompt": "bad image, bad crop"
     },
     {
-        "prompt": "A leopard fights a man; film; super realistic", "size": (1024 + 64*3, 884)
-        "negativePrompt": "bad image, bad painting"
+        "prompt": "A leopard fights a man; film; super realistic",
+        "size": (1024 + 64*3, 884),
+        "negativePrompt": "bad image, bad painting",
     },
     {
         "prompt": "A leopard fights a man; film; realistic",
-        "size": (1024 + 64*3, 884)
-        "negativePrompt": "bad image, bad painting"},
+        "size": (1024 + 64*3, 884),
+        "negativePrompt": "bad image, bad painting"
+    },
     {
         "prompt": "A leopard, a man; film; super leopard",
         "size": (1024 + 64*3, 884),
@@ -126,12 +145,12 @@ prompts_with_size = [
     {
         "prompt": "A leopard, a man; film; super leopard; super cinema; super camera angle; super image",
         "size": (1024 + 64*3, 884),
-        "negativePrompt": "bad image, bad crop, bad leopard, bad film, bad art"
-     },
+        "negativePrompt": "bad image, bad crop, bad leopard, bad film, bad art",
+    },
     {
         "prompt": "Halls of Space, scifi, digital painting; super painting; super image",
         "negativePrompt": "bad painting, bad image",
-        "size": (768, 1024)
+        "size": (768, 1024),
     },
     {
         "prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner",
@@ -141,11 +160,13 @@ prompts_with_size = [
     {
         "prompt": "portrait of obama; super image; super photo",
         "size": (702, 884),
-        "negativePrompt": "bad image, bad crop, zoom crop, bad person, bad eyes"
+        "negativePrompt": "bad image, bad crop, zoom crop, bad person, bad eyes",
     },
     {
         "prompt": "A dragon, but with a gold fish head; super image",
-        "negativePrompt": "cropped image, bad animal, bad painting, realistic, super realistic ", "size": (1024, 768)},
+        "negativePrompt": "cropped image, bad animal, bad painting, realistic, super realistic ",
+        "size": (1024, 768)
+    },
     {
         "prompt": "high aesthetic; super image",
         "negativePrompt": "cropped",
@@ -1141,7 +1162,7 @@ import wandb
 
 PHOTO_COUNT = 2
 
-test_inference_steps = 26
+test_inference_steps = 32
 
 def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
     torch_dtype = torch.float16 if accelerator.device.type == "cuda" else torch.float32
@@ -1159,11 +1180,23 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
         vae=vae,
         torch_dtype=torch_dtype,
     )
+
+    schedulers = [
+        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config, 35, 14),
+        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config, 35, 8),
+        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config, 35, 4),
+        ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config, 35, 4)
+        ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config, 35, 7)
+        ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config, 24, 6)
+        ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config, 35, 12)
+    ]
+
+
     pipeline.to(accelerator.device)
-    pipeline.scheduler = DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config)
 
     for prompt in prompts_with_size:
-        for guidance_scale in [14]:
+        for (schedule_name, scheduler, steps, gscale) in schedulers:
+            pipeline.scheduler = scheduler
             with torch.autocast(device_type="cuda", dtype=vae.dtype):
                 # Reset Seed
                 seed = 123123
@@ -1187,13 +1220,11 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                 images = pipeline(
                     [text] * PHOTO_COUNT,
                     negative_prompt=negative_prompt,
-                    num_inference_steps=test_inference_steps,
-                    guidance_scale=guidance_scale,
+                    num_inference_steps=steps,
+                    guidance_scale=gscale,
                     width=width,
                     height=height,
                 ).images
-
-
 
                 label_negative = (
                     "None" if negative_prompt is None else str(negative_prompt[0:20])
@@ -1202,11 +1233,9 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                 # Limit the length of text, label_negative, and guidance_scale
                 label_text = text[0:100]
                 label_negative = label_negative[0:30]
-                label_guidance_scale = str(guidance_scale)
+                label_guidance_scale = str(gscale)
 
-                label = f"{label_text} | neg: {label_negative} | scale: {label_guidance_scale} | steps: {test_inference_steps}"
-
-
+                label = f"{label_text} | neg: {label_negative} | scale: {label_guidance_scale} | steps: {steps}"
 
                 wandb.log(
                     {label: [wandb.Image(image, caption=label) for image in images]},
