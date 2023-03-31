@@ -1560,6 +1560,26 @@ def main(args):
             step_size_down=args.step_size_down,
             scale_mode="iterations",
         )
+    elif args.lr_scheduler == "logarithmic":
+        class LogarithmicLR(torch.optim.lr_scheduler._LRScheduler):
+            def __init__(self, optimizer, base_lr, max_lr, num_iterations, last_epoch=-1, verbose=False):
+                self.base_lr = base_lr
+                self.max_lr = max_lr
+                self.num_iterations = num_iterations
+                super(LogarithmicLR, self).__init__(optimizer, last_epoch, verbose)
+
+            def get_lr(self):
+                step_ratio = self.last_epoch / self.num_iterations
+                lr_diff = self.max_lr - self.base_lr
+                new_lr = self.base_lr + (lr_diff * np.log10(1 + 9 * step_ratio))
+                return [new_lr for _ in self.base_lrs]
+
+        lr_scheduler = LogarithmicLR(
+            optimizer,
+            base_lr=args.lr_end,
+            max_lr=args.learning_rate,
+            num_iterations=args.total_iterations,
+        )
     else:
         lr_scheduler = get_scheduler(
             args.lr_scheduler,
