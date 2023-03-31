@@ -1017,6 +1017,8 @@ class DreamBoothDataset(Dataset):
             )
             prompt = get_label_from_txt(path) if self.use_txt_as_label else prompt
 
+            prompt = prompt + f"; AR: {aspect_ratio}"
+
 
             if os.path.exists(abs_path):
                 instance_image = Image.open(abs_path)
