@@ -573,15 +573,6 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
-        "--center_crop",
-        default=False,
-        action="store_true",
-        help=(
-            "Whether to center crop the input images to the resolution. If not set, the images will be randomly"
-            " cropped. The images will be resized to the resolution first before cropping."
-        ),
-    )
-    parser.add_argument(
         "--train_text_encoder",
         action="store_true",
         help="Whether to train the text encoder. If set, the text encoder should be float32 precision.",
@@ -615,7 +606,8 @@ def parse_args(input_args=None):
         default=None,
         help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
     )
-    parser.add_argument("--super_image_ratio", type=float, default=1.0),
+    parser.add_argument("--super_image_batch_size", type=int, default=4),
+    parser.add_argument("--inner_batch_size", type=int, default=4),
     parser.add_argument("--super_image_dir", type=str, default=None),
     parser.add_argument(
         "--checkpointing_steps",
@@ -852,6 +844,11 @@ def parse_args(input_args=None):
         help="Enable Attention Slicing",
     )
     parser.add_argument(
+        "--cpu_model_offload",
+        action="store_true",
+        help="Enable cpu model offload",
+    )
+    parser.add_argument(
         "--set_grads_to_none",
         action="store_true",
         help=(
@@ -936,18 +933,17 @@ class DreamBoothDataset(Dataset):
         instance_prompt,
         tokenizer,
         super=None,
-        class_prompt=None,
         size=512,
-        center_crop=False,
         use_filename_as_label=False,
         use_txt_as_label=False,
-        class_data_root=None,
+        inner_batch_size=None,
         super_image_dir=None,
-        super_image_ratio=None,
+        super_image_batch_size=4,
     ):
+        # TODO: Read this carefully and refacto and improve
         self.size = size
-        self.center_crop = center_crop
         self.tokenizer = tokenizer
+        self.inner_batch_size = inner_batch_size
 
         self.instance_data_root = Path(instance_data_root)
         if not self.instance_data_root.exists():
@@ -955,139 +951,103 @@ class DreamBoothDataset(Dataset):
                 f"Instance {self.instance_data_root} images root doesn't exists."
             )
 
-        if class_data_root:
-            self.class_data_root = Path(class_data_root)
-        else:
-            self.class_data_root = None
-
-        self.instance_images_path = all_images(self.instance_data_root)
-        self.num_instance_images = len(self.instance_images_path)
+        all_files = [f for f in self.instance_data_root.glob('**/*')]
+        self.num_instance_images = len(all_files)
+        print("=====")
+        print("Instance Image count: " + str(self.num_instance_images))
         self.instance_prompt = instance_prompt
+
         self.use_filename_as_label = use_filename_as_label
         self.use_txt_as_label = use_txt_as_label
         self._length = self.num_instance_images
 
         self.super_image_dir = super_image_dir
-        self.super_image_ratio = super_image_ratio
+        self.super_image_batch_size = super_image_batch_size
+
         if self.super_image_dir:
+            self.super_image_dir = Path(super_image_dir)
 
-            self.super_images_paths = all_images(super_image_dir)
-            self.num_super_images = len(self.super_images_paths)
+        self.aspect_ratio_dirs = sorted(list(self.instance_data_root.iterdir()))
+        self.folder_weights = [
+            len(list(ar_dir.iterdir())) / sum(len(list(ar.iterdir())) for ar in self.aspect_ratio_dirs)
+            for ar_dir in self.aspect_ratio_dirs
+        ]
 
-        self.image_transforms = transforms.Compose(
-            [
-                transforms.Resize(
-                    size, interpolation=transforms.InterpolationMode.BILINEAR
-                ),
-                transforms.CenterCrop(size)
-                if center_crop
-                else transforms.RandomCrop(size),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
 
-        self.image_transforms = transforms.Compose(
-            [
-                transforms.Resize(
-                    size, interpolation=transforms.InterpolationMode.BILINEAR
-                ),
-                transforms.CenterCrop(size)
-                if center_crop
-                else transforms.RandomCrop(size),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
 
     def __len__(self):
         return self._length
 
     def __getitem__(self, index):
         example = {}
-        path = self.instance_images_path[index % self.num_instance_images]
-        prompt = (
-            get_filename(path) if self.use_filename_as_label else self.instance_prompt
+        aspect_ratio_index = random.choices(range(len(self.aspect_ratio_dirs)), weights=self.folder_weights)[0]
+        aspect_ratio_dir = self.aspect_ratio_dirs[aspect_ratio_index]
+        image_files = list((self.instance_data_root / aspect_ratio_dir).iterdir())
+        superimage_files = list((self.super_image_dir / aspect_ratio_dir).iterdir())
+
+        width, height = map(int, aspect_ratio_dir.name.split("x"))
+        batch_size_adjust = (512 * 512) / (width * height)
+
+        image_filepaths = random.sample(image_files, int(self.inner_batch_size * batch_size_adjust))
+        superimage_filepaths = random.sample(superimage_files, int(self.super_image_batch_size * batch_size_adjust))
+
+        size = (width, height)
+
+        self.image_transforms = transforms.Compose(
+            [
+                transforms.Resize(
+                    size, interpolation=transforms.InterpolationMode.BILINEAR
+                ),
+                transforms.CenterCrop(size),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
         )
-        prompt = get_label_from_txt(path) if self.use_txt_as_label else prompt
 
-        real_path = os.path.abspath(path)
 
-        instance_image = Image.open(real_path)
-        if not instance_image.mode == "RGB":
-            instance_image = instance_image.convert("RGB")
-        example["instance_images"] = self.image_transforms(instance_image)
-        example["instance_prompt_ids"] = self.tokenizer(
-            prompt,
-            truncation=True,
-            padding="max_length",
-            max_length=self.tokenizer.model_max_length,
-            return_tensors="pt",
-        ).input_ids
+        images = []
+        prompt_ids = []
 
-        import random
+        for path in image_filepaths + superimage_filepaths:
+            abs_path = os.path.abspath(path)
+            real_path = os.path.realpath(path)
 
-        r = random.random()
-        ratio = self.super_image_ratio or 1.0
-        if self.super_image_dir and r < ratio:
-            path = self.super_images_paths[index % self.num_super_images]
-            super_image = Image.open(path)
-
-            super_prompt = (
-                get_filename(path)
-                if self.use_filename_as_label
-                else self.instance_prompt
+            prompt = (
+                get_filename(path) if self.use_filename_as_label else self.instance_prompt
             )
-            super_prompt = (
-                get_label_from_txt(path) if self.use_txt_as_label else super_prompt
-            )
+            prompt = get_label_from_txt(path) if self.use_txt_as_label else prompt
 
-            if not super_image.mode == "RGB":
-                super_image = super_image.convert("RGB")
 
-            example["super_images"] = self.image_transforms(super_image)
-            example["super_image_prompt_ids"] = self.tokenizer(
-                super_prompt,
-                truncation=True,
-                padding="max_length",
-                max_length=self.tokenizer.model_max_length,
-                return_tensors="pt",
-            ).input_ids
-        else:
-            example["super_images"] = None
-            example["super_image_prompt_ids"] = None
+            if os.path.exists(abs_path):
+                instance_image = Image.open(abs_path)
+                if not instance_image.mode == "RGB":
+                    instance_image = instance_image.convert("RGB")
 
-        if self.class_data_root:
-            class_image = Image.open(
-                self.class_images_path[index % self.num_class_images]
-            )
-            if not class_image.mode == "RGB":
-                class_image = class_image.convert("RGB")
-            example["class_images"] = self.image_transforms(class_image)
-            example["class_prompt_ids"] = self.tokenizer(
-                self.class_prompt,
-                truncation=True,
-                padding="max_length",
-                max_length=self.tokenizer.model_max_length,
-                return_tensors="pt",
-            ).input_ids
+                images.append(self.image_transforms(instance_image))
+                prompt_ids.append(self.tokenizer(
+                    prompt,
+                    truncation=True,
+                    padding="max_length",
+                    max_length=self.tokenizer.model_max_length,
+                    return_tensors="pt",
+                ).input_ids)
+            else:
+                print(f"File not found: {abs_path}")
+
+
+        example["images"] = images
+        example["prompt_ids"] = prompt_ids
 
         return example
 
 
-def collate_fn(examples, with_prior_preservation=False):
-    input_ids = [example["instance_prompt_ids"] for example in examples]
-    pixel_values = [example["instance_images"] for example in examples]
+def collate_fn(examples):
+    input_ids = [example["prompt_ids"] for example in examples]
+    pixel_values = [example["images"] for example in examples]
 
-    input_ids += [example["super_image_prompt_ids"] for example in examples if example.get("super_image_prompt_ids") is not None]
-    pixel_values += [example["super_images"] for example in examples if example.get("super_images") is not None]
-
-
-    # Concat class and instance examples for prior preservation.
-    # We do this to avoid doing two forward passes.
-    if with_prior_preservation:
-        input_ids += [example["class_prompt_ids"] for example in examples]
-        pixel_values += [example["class_images"] for example in examples]
+    import itertools
+    input_ids = list(itertools.chain(*input_ids))
+    pixel_values = list(itertools.chain(*pixel_values))
 
     pixel_values = torch.stack(pixel_values)
     pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
@@ -1098,6 +1058,7 @@ def collate_fn(examples, with_prior_preservation=False):
         "input_ids": input_ids,
         "pixel_values": pixel_values,
     }
+
     return batch
 
 
@@ -1442,11 +1403,16 @@ def main(args):
     if args.enable_vae_tiling:
         vae.enable_tiling()
 
-    # if args.enable_attention_slicing:
-    #    unet.set_attention_slice(slice_size)
+    if args.enable_attention_slicing:
+        unet.set_attention_slice(slice_size)
+
+    if args.cpu_offload:
+        for model in [self.unet, self.text_encoder, self.vae]:
+            model.enable_model_cpu_offload()
 
     if args.channels_last:
         unet.to(memory_format=torch.channels_last)
+
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -1464,6 +1430,7 @@ def main(args):
                     )
             else:
                 unet.enable_xformers_memory_efficient_attention()
+
 
             if args.enable_xformers_vae:
                 vae.enable_xformers_memory_efficient_attention(attention_op=None)
@@ -1544,22 +1511,20 @@ def main(args):
     train_dataset = DreamBoothDataset(
         instance_data_root=args.instance_data_dir,
         instance_prompt=args.instance_prompt,
-        class_data_root=args.class_data_dir if args.with_prior_preservation else None,
-        class_prompt=args.class_prompt,
         tokenizer=tokenizer,
         size=args.resolution,
-        center_crop=args.center_crop,
         use_filename_as_label=args.use_filename_as_label,
         use_txt_as_label=args.use_txt_as_label,
         super_image_dir=args.super_image_dir,
-        super_image_ratio=args.super_image_ratio,
+        super_image_batch_size=args.super_image_batch_size,
+        inner_batch_size=args.inner_batch_size,
     )
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.train_batch_size,
         shuffle=True,
-        collate_fn=lambda examples: collate_fn(examples, args.with_prior_preservation),
+        collate_fn=collate_fn,
         num_workers=args.dataloader_num_workers,
     )
 
