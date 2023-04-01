@@ -159,23 +159,33 @@ prompts_with_size = [
         "negativePrompt": "bad image, bad crop, zoom crop, bad person, bad eyes",
     },
     {
-        "prompt": "A mystical dragon animal hybrid, fantasy; super image",
-        "negativePrompt": "cropped image, bad animal, bad painting, realistic, super realistic ",
+        "prompt": "A mystical dragon walrus super animal hybrid, fantasy; super image; painterly",
+        "negativePrompt": "cropped image, bad animal, bad painting, ",
         "size": (1024, 768)
     },
     {
-        "prompt": "A mystical dragon animal, rpg; super image",
-        "negativePrompt": "cropped image, bad animal, bad painting, realistic, super realistic ",
+        "prompt": "He Roars within his kingdom; A mystical dragon rpg; super image; realistic; super realistic",
+        "negativePrompt": "cropped image, bad animal, bad painting",
         "size": (1024, 768)
     },
     {
-        "prompt": "Magical Landscape; fantasy; rpg; high aesthetic; super image",
-        "negativePrompt": "cropped",
+        "prompt": "Bizzare Magical Landscape; fantasy; rpg; high aesthetic; super image",
+        "negativePrompt": "bad image, bad crop",
         "size": (768, 1024)
     },
     {
+        "prompt": "Cyberpunk Chipmunk; super image; super animal",
+        "negativePrompt": "bad image, bad crop",
+        "size": (512, 768)
+    },
+    {
+        "prompt": "Cyberpunk Hedgehog; super image; super animal",
+        "negativePrompt": "bad image, bad crop",
+        "size": (256, 512)
+    },
+    {
         "prompt": "high aesthetic; super image; A photo of Obama at a Diner with Anthony Bourdain; Black and White Photo",
-        "negativePrompt": "image; cropped",
+        "negativePrompt": "bad image; cropped; bad crop",
         "size": (768, 1024),
     },
 ]
@@ -1017,7 +1027,7 @@ class DreamBoothDataset(Dataset):
             )
             prompt = get_label_from_txt(path) if self.use_txt_as_label else prompt
 
-            prompt = prompt + f"; AR: {aspect_ratio}"
+            prompt = prompt + f"; AR: {aspect_ratio_dir}"
 
 
             if os.path.exists(abs_path):
@@ -1093,7 +1103,14 @@ def get_full_repo_name(
         return f"{organization}/{model_id}"
 
 
+# keep track of saved steps and skip if already done
+saved_steps = {}
 def save_model(accelerator, unet, text_encoder, args, step=None):
+    if saved_steps.get(step):
+        return
+    else:
+        saved_steps[step] = True
+
     unet = accelerator.unwrap_model(unet)
     text_encoder = accelerator.unwrap_model(text_encoder)
 
@@ -1127,7 +1144,15 @@ PHOTO_COUNT = 2
 
 test_inference_steps = 32
 
+# record to not repeat
+sampled_steps = {}
+
 def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
+    if sampled_steps.get(step):
+        return
+    else:
+        sampled_steps[step] = True
+
     torch_dtype = torch.float16 if accelerator.device.type == "cuda" else torch.float32
     if args.mixed_precision == "fp32":
         torch_dtype = torch.float32
@@ -1145,13 +1170,9 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
     )
 
     schedulers = [
-        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config), 35, 14),
-        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config), 35, 8),
-        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config), 35, 4),
+        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config), 28, 6),
+        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config), 16, 4),
         ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config), 35, 4),
-        ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config), 35, 7),
-        ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config), 24, 6),
-        ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config), 35, 12),
     ]
 
 
@@ -1408,7 +1429,7 @@ def main(args):
     if args.enable_attention_slicing:
         unet.set_attention_slice(slice_size)
 
-    if args.cpu_offload:
+    if args.cpu_model_offload:
         for model in [self.unet, self.text_encoder, self.vae]:
             model.enable_model_cpu_offload()
 
