@@ -1,3 +1,5 @@
+import wandb
+from torch import functional as DF
 import argparse
 import hashlib
 import itertools
@@ -54,6 +56,8 @@ aux_text_embeddings = []
 instruction_map = {}
 
 # Define a function to load images and perform pre-processing
+
+
 def load_image(path):
     image = Image.open(path)
     return image
@@ -73,10 +77,12 @@ def pre_compute(directory, image_files, instructions, cache_dir):
     if not os.path.exists(cache_dir):
         os.makedirs(cache_dir)
 
-    # Cache instruction embeddings
-    instruction_cache_path = os.path.join(cache_dir, "instruction_embeddings.pt")
-    if not os.path.exists(instruction_cache_path):
+    cache_path = os.path.join(cache_dir, "embeddings_cache.pt")
+
+    if not os.path.exists(cache_path):
         instruction_map = {}
+        image_text_map = {}
+
         for instruction in instructions:
             # Get the instruction embedding
             instruction_inputs = clip_processor(text=[instruction], return_tensors="pt", padding=True)
@@ -85,39 +91,39 @@ def pre_compute(directory, image_files, instructions, cache_dir):
             instruction_embedding /= instruction_embedding.norm(dim=-1, keepdim=True)
             instruction_map[instruction] = instruction_embedding.cpu()
 
-        # Save instruction embeddings to cache
-        torch.save(instruction_map, instruction_cache_path)
+        for image_file in image_files:
+            image_path = os.path.join(directory, image_file)
 
-    # Cache image and text embeddings
-    for image_file in image_files:
-        image_path = os.path.join(directory, image_file)
-        image_cache_path = os.path.join(cache_dir, f"{image_file}_image_embedding.pt")
-        text_cache_path = os.path.join(cache_dir, f"{image_file}_text_embedding.pt")
-
-        # Get and cache image embedding
-        if not os.path.exists(image_cache_path):
+            # Get the image embedding
             image = load_image(image_path)
             image_inputs = clip_processor(images=image, return_tensors="pt")
             with torch.no_grad():
                 image_embedding = clip_model.get_image_features(**image_inputs.to(device))
             image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
-            image_embedding_cpu = image_embedding.cpu()
 
-            # Save image embedding to cache
-            torch.save(image_embedding_cpu, image_cache_path)
-
-        # Get and cache text embedding
-        if not os.path.exists(text_cache_path):
+            # Get the text embedding
             text = image_file
             text_inputs = clip_processor(text=[text], return_tensors="pt", padding=True, truncation=True)
             with torch.no_grad():
                 text_embedding = clip_model.get_text_features(**text_inputs.to(device))
             text_embedding /= text_embedding.norm(dim=-1, keepdim=True)
-            text_embedding_cpu = text_embedding.cpu()
 
-            # Save text embedding to cache
-            torch.save(text_embedding_cpu, text_cache_path)
+            image_text_map[image_file] = {"image_embedding": image_embedding.cpu(), "text_embedding": text_embedding.cpu()}
 
+        # Save all embeddings to a single cache file
+        torch.save({"instruction_map": instruction_map, "image_text_map": image_text_map}, cache_path)
+
+
+def load_embeddings(cache_dir):
+    cache_path = os.path.join(cache_dir, "embeddings_cache.pt")
+    if not os.path.exists(cache_path):
+        raise FileNotFoundError(f"Embeddings cache not found in {cache_path}")
+
+    embeddings_cache = torch.load(cache_path)
+    instruction_map = embeddings_cache["instruction_map"]
+    image_text_map = embeddings_cache["image_text_map"]
+
+    return instruction_map, image_text_map
 
 
 prompts_with_size = [
@@ -188,10 +194,6 @@ def get_random_instruct():
 # Load and precompute embeddings
 directory = "/home/paperspace/datasets/aux_images_1/data_1"
 
-import os
-import torch
-import numpy as np
-import faiss
 
 def load_embeddings(cache_dir):
     instruction_cache_path = os.path.join(cache_dir, "instruction_embeddings.pt")
@@ -217,6 +219,7 @@ def load_embeddings(cache_dir):
             image_text_map[image_file] = {"image_embedding": image_embedding, "text_embedding": text_embedding}
 
     return instruction_map, image_text_map
+
 
 def create_faiss_indices(instruction_map, image_text_map, clip_model):
     aux_image_embeddings = [entry["image_embedding"] for entry in image_text_map.values()]
@@ -288,11 +291,6 @@ def get_polynomial_decay_schedule_with_warmup(
 
 
 logger = get_logger(__name__)
-
-import math
-
-from dctorch import functional as DF
-import torch
 
 
 def sqrtm(x):
@@ -1057,8 +1055,6 @@ def save_model(accelerator, unet, text_encoder, args, step=None):
             repo.push_to_hub(commit_message="End of training", blocking=False, auto_lfs_prune=True)
 
 
-import wandb
-
 PHOTO_COUNT = 2
 
 
@@ -1102,8 +1098,8 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                 if not (negative_prompt is None):
                     negative_prompt = [negative_prompt]
 
-
                 # Function for organization
+
                 def get_prompt_emebds():
                     # TODO: add all tests for each type including mix
                     instruct = "text2img"
@@ -1438,7 +1434,7 @@ def main(args):
             optimizer, args.lr_warmup_steps, total_steps, lr_end=args.lr_end, power=args.lr_power, last_epoch=-1
         )
     elif args.lr_scheduler == "cyclical":
-        clr_fn = lambda x: 1 / (5 ** (x * 0.0001))
+        def clr_fn(x): return 1 / (5 ** (x * 0.0001))
         lr_scheduler = torch.optim.lr_scheduler.CyclicLR(
             optimizer,
             base_lr=args.lr_end,
