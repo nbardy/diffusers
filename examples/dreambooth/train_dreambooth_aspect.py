@@ -64,107 +64,82 @@ from diffusers import StableDiffusionPipeline
 
 prompts_with_size = [
     {
-        "prompt": "Perfect Breaking wave shapes; A dramatic breaking wave; tilt-shift zoom; film; super image",
-        "negativePrompt": "bad wave, bad wave shape, bad wave; bad image; bad crop; bad image",
+        "prompt": "Perfect Breaking wave shapes; A dramatic breaking wave; tilt-shift zoom; film; super image; AR: 1024x768",
+        "negativePrompt": "bad wave, bad wave shape, bad wave; bad image; bad crop; bad image; zoom crop; random crop",
         "size": (1024, 768),
     },
     {
-        "prompt": "a full body photo of 25 y.o brown tan skinned American woman with glasses, Short Curly hair, wearing gypsy style clothes, modestly clothed, fully clothed, background is in traditional Turkish house, high detailed skin, realistic sunlight lighting, thick thigh, wide hips, visible face pores",
+        "prompt": "a full body photo of 25 y.o brown tan skinned American woman with glasses, Short Curly hair, wearing gypsy style clothes, modestly clothed, fully clothed, background is in traditional Turkish house, high detailed skin, realistic sunlight lighting, thick thigh, wide hips, visible face pores, AR: 768x1152",
         "negativePrompt": "deformed iris, deformed pupils, semi-realistic, CGI, 3d, render, sketch, cartoon, drawing, anime, text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, erotic, sexy, nudity, half-naked, half naked, camera flash, oversaturated, hard lighting, diffuser lighting",
         "size": (768, 1024 + 64 * 2)
     },
     {
-        "prompt": "A dramatic wave breaking; film; super image",
-        "negativePrompt": "bad wave, bad wave shape, bad wave; bad image; bad crop; bad image; center crop",
+        "prompt": "A dramatic wave breaking; super image; super wave AR: 1024x768",
+        "negativePrompt": "lowres, bad image, bad corp, zoom crop, error, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry, ugly",
         "size": (1024, 768),
     },
     {
-        "prompt": "A dramatic wave breaking; film; super image",
-        "negativePrompt": "lowres, text, error, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry, ugly, text",
-        "size": (1024, 768),
-    },
-    {
-        "prompt": "Storied Sorrows, A women sits beneath a soft light, sobbing in a chair, dimly lit hotel room; film; super image",
-        "negativePrompt": "bad image, bad crop, bad lighting, bad film, bad angle, misformed person, bad person, bad people",
+        "prompt": "Storied Sorrows, A women sits beneath a soft light, sobbing in a chair, dimly lit hotel room; film; super image; good crop AR: 1280x960",
+        "negativePrompt": "bad image, bad crop, zoom crop, random crop, bad lighting, bad film, bad angle, misformed person, bad person, bad people",
         "size": (1024 + 64 * 4, 768 + 3 * 64),
     },
     {
-        "prompt": "a cute bird, orange wings; rosetip feathers; super image",
+        "prompt": "a cute bird; super image, AR: 768x768",
         "size": (768, 768),
         "negativePrompt": "bad image"
     },
     {
-        "prompt": "a cute bird, orange wings; rosetip feathers; high aesthetic",
+        "prompt": "a smiling woman; super image, AR: 768x768",
         "size": (768, 768),
-        "negativePrompt": "bad image"
+        "negativePrompt": "bad image, bad crop, bad zoom"
     },
+    {"prompt": "Stunning potrait of a Liquid Chrome Gravity Sculpture; super image; realistic; fantasy; super fantasy; photo, AR: 768x1152", "size": (768, 1024 + 64 * 4)},
     {
-        "prompt": "a cute bird, high aesthetic; super image",
-        "size": (768, 768),
-        "negativePrompt": "bad image"
-    },
-    {"prompt": "A women smiling; super image; high aesthetic", "size": (512, 768)},
-    {"prompt": "A women smiling; super image", "size": (768, 1024)},
-    {"prompt": "A women smiling; super image, high aesthetic", "size": (768, 512)},
-    {"prompt": "Stunning potrait of a Liquid Chrome Gravity Sculpture", "size": (768, 1024 + 64 * 4)},
-    {
-        "prompt": "Cyber eye; portrait of a warrior princess; Jeweled Crown; super image; dramatic fisheye",
-        "size": (768, 1024 + 64 * 4),
+        "prompt": "Cyber eye; portrait of a warrior princess; Jeweled Crown; super image; dramatic fisheye; AR: 768x896",
+        "size": (768, 768 + 64 * 2),
         "negativePrompt": "bad image, zoom crop, bad crop"
     },
-    {"prompt": "super image", "size": (768, 884)},
-    {"prompt": "A cat that looks like a bear; super animal; super image; realistic", "size": (768, 884)},
+    {
+        "prompt": "A cat that looks like a bear; super animal; super image; realistic; good crop AR: 768x884",
+        "size": (768, 884),
+        "negativePrompt": "bad image, zoom crop, bad crop; lowres, low quality, bad angle, misformed animal, misformed person"
+    },
     {
         "prompt": "The end of the world, Nucleur Apocolypse, Starfish on a Beach; super film; super image; realistic",
         "size": (1024 + 64*3, 884),
         "negativePrompt": "bad image, bad film, zoom crop, bad crop"
     },
     {
-        "prompt": "Barren Scowls; film; super image", "size": (1024 + 64*3, 884),
-        "negativePrompt": "bad image, bad crop"
+        "prompt": "Barren Scowls; film; super image; super camera angle; good crop, AR: 1216x884", "size": (1024 + 64*3, 884),
+        "negativePrompt": "bad image, bad crop; bad film, bad camera angle; misformed faces, misaligned eyes, malformed faces, malformed limbs, misformed animal"
     },
     {
-        "prompt": "A leopard fights a man; film; super realistic",
+        "prompt": "A leopard fights a man; film; super realistic; super image; dratmatic shot; good crop; AR: 1216x884",
         "size": (1024 + 64*3, 884),
-        "negativePrompt": "bad image, bad painting",
+        "negativePrompt": "bad image, bad painting, zoom crop, bad crop, lowres; low quality, too dark, too bright; ugly, misformed person; misformed animal",
     },
     {
-        "prompt": "A leopard fights a man; film; realistic",
-        "size": (1024 + 64*3, 884),
-        "negativePrompt": "bad image, bad painting"
-    },
-    {
-        "prompt": "A leopard, a man; film; super leopard",
-        "size": (1024 + 64*3, 884),
-        "negativePrompt": "bad image, bad crop, bad leopard, bad film, bad art",
-    },
-    {
-        "prompt": "A leopard, a man; film; super leopard; super cinema; super camera angle; super image",
-        "size": (1024 + 64*3, 884),
-        "negativePrompt": "bad image, bad crop, bad leopard, bad film, bad art",
-    },
-    {
-        "prompt": "Halls of Space, scifi, digital painting; super painting; super image",
-        "negativePrompt": "bad painting, bad image",
+        "prompt": "Halls of Space, scifi, digital painting; super painting; super image; AR: 768x1024, painterly",
+        "negativePrompt": "bad painting, bad image; bad crop; zoom crop; random crop",
         "size": (768, 1024),
     },
     {
-        "prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner",
+        "prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner, AR: 1024x884",
         "negativePrompt": "bad people, malformed people, misfigured persons",
         "size": (1024, 884),
     },
     {
-        "prompt": "portrait of obama; super image; super photo",
+        "prompt": "portrait of obama; super image; super photo, good crop AR: 702x884",
         "size": (702, 884),
-        "negativePrompt": "bad image, bad crop, zoom crop, bad person, bad eyes",
+        "negativePrompt": "bad image, bad crop, zoom crop, bad person, bad eyes, misaligned eyes, malformed person",
     },
     {
-        "prompt": "A mystical dragon walrus super animal hybrid, fantasy; super image; painterly",
-        "negativePrompt": "cropped image, bad animal, bad painting, ",
+        "prompt": "A mystical dragon walrus super animal hybrid, fantasy; super image; painterly ; good crop AR: 1024x768",
+        "negativePrompt": "cropped image, misfigured animal, bad painting, misfigured person, ugly limbs, zoom crop; bad crop; center crop",
         "size": (1024, 768)
     },
     {
-        "prompt": "He Roars within his kingdom; A mystical dragon rpg; super image; realistic; super realistic",
+        "prompt": "He Roars within his kingdom; A mystical dragon rpg; super image; realistic; super realistic, AR: 1024x768",
         "negativePrompt": "cropped image, bad animal, bad painting",
         "size": (1024, 768)
     },
@@ -174,19 +149,14 @@ prompts_with_size = [
         "size": (768, 1024)
     },
     {
-        "prompt": "Cyberpunk Chipmunk; super image; super animal",
+        "prompt": "Cyberpunk Chipmunk; super image; super animal; AR: 512x768",
         "negativePrompt": "bad image, bad crop",
         "size": (512, 768)
     },
     {
-        "prompt": "Cyberpunk Hedgehog; super image; super animal",
+        "prompt": "Cyberpunk Hedgehog; super image; super animal, good crop AR: 256x512",
         "negativePrompt": "bad image, bad crop",
         "size": (256, 512)
-    },
-    {
-        "prompt": "high aesthetic; super image; A photo of Obama at a Diner with Anthony Bourdain; Black and White Photo",
-        "negativePrompt": "bad image; cropped; bad crop",
-        "size": (768, 1024),
     },
 ]
 
@@ -295,7 +265,7 @@ def make_pink_noise(latents):
 # Takes the ideas from offset noise(1) and adds uses two gamma distributions to
 # alter the noise schedule adding different amounts of offset noise at different frequencies
 # [1] https://www.crosslabs.org/blog/diffusion-with-offset-noise
-def gamma_offset_noise(latents):
+def gamma_offset_noise(latents, discount=1.0):
     device = latents.device
     g2 = torch.clamp(
         random_gamma((latents.shape[0], latents.shape[1], 1, 1), alpha=0.5, beta=10),
@@ -306,10 +276,12 @@ def gamma_offset_noise(latents):
     # g1 is the random freq
     # g2 is the proportion to shift the noise
     noise = torch.randn_like(latents, device=latents.device)
-    return torch.randn_like(latents) + g2 * torch.randn(
-        latents.shape[0], latents.shape[1], 1, 1
+    thick_noise = torch.randn(
+        latents.shape[0], latents.shape[1], 1, 1,
+        device=device
     )
 
+    return noise + discount * g2 * thick_noise
 
 def create_checkerboard_pixels(pixel_w, pixel_h, block_size):
     # Compute the checkerboard grid size and block size in pixels
@@ -410,9 +382,9 @@ def random_high_freq(latents):
 
 
 DISCOUNT_HIGH = 0.08
-DISCOUNT_LOW = 0.08
+DISCOUNT_LOW = 0.01
 
-LOW_FLIP = 0.05
+LOW_FLIP = 0.2
 HIGH_FLIP = 0.05
 
 
@@ -454,7 +426,7 @@ def gamma_pink_noise(latents):
 def pyramid_noise_like(x, discount=0.9):
 
     b, c, w, h = x.shape
-    u = nn.Upsample(size=(w, h), mode="bilinear")
+    u = torch.nn.Upsample(size=(w, h), mode="bilinear")
     noise = torch.randn_like(x)
 
     for i in range(10):
@@ -572,15 +544,6 @@ def parse_args(input_args=None):
     )
     parser.add_argument(
         "--seed", type=int, default=None, help="A seed for reproducible training."
-    )
-    parser.add_argument(
-        "--resolution",
-        type=int,
-        default=512,
-        help=(
-            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
-            " resolution"
-        ),
     )
     parser.add_argument(
         "--train_text_encoder",
@@ -870,7 +833,7 @@ def parse_args(input_args=None):
     parser.add_argument("--save_model_every_n_steps", type=int)
     parser.add_argument("--sample_model_every_n_steps", type=int)
     parser.add_argument("--pink_noise", type=bool, default=False)
-    parser.add_argument("--gamma_offset_noise", type=bool, default=False)
+    parser.add_argument("--gamma_offset_noise", type=float, default=1.0)
     parser.add_argument("--pyramid_noise", type=bool, default=False)
     parser.add_argument("--offset_noise", type=bool, default=False)
     parser.add_argument("--hi_lo_noise", type=bool, default=False)
@@ -1171,7 +1134,6 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
 
     schedulers = [
         ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config), 28, 6),
-        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config), 16, 4),
         ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config), 35, 4),
     ]
 
@@ -1535,7 +1497,6 @@ def main(args):
         instance_data_root=args.instance_data_dir,
         instance_prompt=args.instance_prompt,
         tokenizer=tokenizer,
-        size=args.resolution,
         use_filename_as_label=args.use_filename_as_label,
         use_txt_as_label=args.use_txt_as_label,
         super_image_dir=args.super_image_dir,
@@ -1748,9 +1709,9 @@ def main(args):
                 elif args.hi_lo_noise:
                     noise = hi_lo_noise(latents)
                 elif args.gamma_offset_noise:
-                    noise = gamma_offset_noise(latents)
+                    noise = gamma_offset_noise(latents, discount=args.gamma_offset_noise)
                 elif args.pyramid_noise:
-                    noise = pyramid_noise_like(x, discount=0.8)
+                    noise = pyramid_noise_like(latents, discount=0.8)
                 else:
                     noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
@@ -1849,7 +1810,7 @@ def main(args):
                 if args.sample_model_every_n_steps != None:
                     if (
                         global_step % args.sample_model_every_n_steps
-                    ) == 0 or global_step == 1:
+                    ) == 0 and global_step > 5:
                         sample_model(
                             accelerator, unet, text_encoder, vae, args, global_step
                         )

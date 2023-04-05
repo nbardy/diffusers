@@ -67,31 +67,56 @@ clip_processor = CLIPProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B
 # Accepts an item from the dataset and returns a random instruction version o
 
 
-def pre_compute(directory, image_files, instructions):
+def pre_compute(directory, image_files, instructions, cache_dir):
     image_files = image_files[:200]  # Only process the first 200 images
 
-    for instruction in instructions:
-        # Get the instruction embedding
-        instruction_inputs = clip_processor(text=[instruction], return_tensors="pt", padding=True)
-        with torch.no_grad():
-            instruction_embedding = clip_model.get_text_features(**instruction_inputs.to(device))
-        instruction_embedding /= instruction_embedding.norm(dim=-1, keepdim=True)
-        instruction_map[instruction] = instruction_embedding.cpu().numpy()
+    if not os.path.exists(cache_dir):
+        os.makedirs(cache_dir)
 
+    # Cache instruction embeddings
+    instruction_cache_path = os.path.join(cache_dir, "instruction_embeddings.pt")
+    if not os.path.exists(instruction_cache_path):
+        instruction_map = {}
+        for instruction in instructions:
+            # Get the instruction embedding
+            instruction_inputs = clip_processor(text=[instruction], return_tensors="pt", padding=True)
+            with torch.no_grad():
+                instruction_embedding = clip_model.get_text_features(**instruction_inputs.to(device))
+            instruction_embedding /= instruction_embedding.norm(dim=-1, keepdim=True)
+            instruction_map[instruction] = instruction_embedding.cpu()
+
+        # Save instruction embeddings to cache
+        torch.save(instruction_map, instruction_cache_path)
+
+    # Cache image and text embeddings
     for image_file in image_files:
         image_path = os.path.join(directory, image_file)
+        image_cache_path = os.path.join(cache_dir, f"{image_file}_image_embedding.pt")
+        text_cache_path = os.path.join(cache_dir, f"{image_file}_text_embedding.pt")
 
-        # Get the image embedding
-        image = load_image(image_path)
-        image_inputs = clip_processor(images=image, return_tensors="pt")
-        with torch.no_grad():
-            image_embedding = clip_model.get_image_features(**image_inputs.to(device))
-        image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
-        aux_image_embeddings.append(image_embedding.cpu().numpy())
+        # Get and cache image embedding
+        if not os.path.exists(image_cache_path):
+            image = load_image(image_path)
+            image_inputs = clip_processor(images=image, return_tensors="pt")
+            with torch.no_grad():
+                image_embedding = clip_model.get_image_features(**image_inputs.to(device))
+            image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
+            image_embedding_cpu = image_embedding.cpu()
 
-        # Get the text embedding
-        text = image_file
-        text_inputs = clip_processor(text=[text], return_tensors="pt", padding=True, truncation=True)
+            # Save image embedding to cache
+            torch.save(image_embedding_cpu, image_cache_path)
+
+        # Get and cache text embedding
+        if not os.path.exists(text_cache_path):
+            text = image_file
+            text_inputs = clip_processor(text=[text], return_tensors="pt", padding=True, truncation=True)
+            with torch.no_grad():
+                text_embedding = clip_model.get_text_features(**text_inputs.to(device))
+            text_embedding /= text_embedding.norm(dim=-1, keepdim=True)
+            text_embedding_cpu = text_embedding.cpu()
+
+            # Save text embedding to cache
+            torch.save(text_embedding_cpu, text_cache_path)
 
 
 
@@ -163,16 +188,57 @@ def get_random_instruct():
 # Load and precompute embeddings
 directory = "/home/paperspace/datasets/aux_images_1/data_1"
 
+import os
+import torch
+import numpy as np
+import faiss
+
+def load_embeddings(cache_dir):
+    instruction_cache_path = os.path.join(cache_dir, "instruction_embeddings.pt")
+    if not os.path.exists(instruction_cache_path):
+        raise FileNotFoundError(f"Instruction embeddings not found in {instruction_cache_path}")
+
+    instruction_map = torch.load(instruction_cache_path)
+
+    image_text_map = {}
+
+    for file_name in os.listdir(cache_dir):
+        if file_name.endswith("_image_embedding.pt"):
+            image_file = file_name[:-len("_image_embedding.pt")]
+            image_cache_path = os.path.join(cache_dir, f"{image_file}_image_embedding.pt")
+            text_cache_path = os.path.join(cache_dir, f"{image_file}_text_embedding.pt")
+
+            if not os.path.exists(text_cache_path):
+                raise FileNotFoundError(f"Text embeddings not found in {text_cache_path}")
+
+            image_embedding = torch.load(image_cache_path).numpy()
+            text_embedding = torch.load(text_cache_path).numpy()
+
+            image_text_map[image_file] = {"image_embedding": image_embedding, "text_embedding": text_embedding}
+
+    return instruction_map, image_text_map
+
+def create_faiss_indices(instruction_map, image_text_map, clip_model):
+    aux_image_embeddings = [entry["image_embedding"] for entry in image_text_map.values()]
+    aux_text_embeddings = [entry["text_embedding"] for entry in image_text_map.values()]
+
+    # Create separate FAISS indices for images and texts
+    aux_image_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
+    aux_text_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
+
+    # Add embeddings to the indices
+    aux_image_index.add(np.vstack(aux_image_embeddings))
+    aux_text_index.add(np.vstack(aux_text_embeddings))
+
+    return aux_image_index, aux_text_index
+
+
 image_files = os.listdir(directory)
-pre_compute(directory, image_files, instructions)
+cache_dir = "knn_embedding_cache"
+pre_compute(directory, image_files, instructions, cache_dir)
 
-# Create separate FAISS indices for images and texts
-aux_image_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
-aux_text_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
-
-# Add embeddings to the indices
-aux_image_index.add(np.vstack(aux_image_embeddings))
-aux_text_index.add(np.vstack(aux_text_embeddings))
+instruction_map, image_text_map = load_embeddings(cache_dir)
+aux_image_index, aux_text_index = create_faiss_indices(instruction_map, image_text_map, clip_model)
 
 
 def get_polynomial_decay_schedule_with_warmup(

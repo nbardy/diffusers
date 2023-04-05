@@ -218,8 +218,6 @@ def get_polynomial_decay_schedule_with_warmup(
         elif current_step > num_training_steps:
             return lr_end / lr_init  # as LambdaLR multiplies by lr_init
         else:
-            print("Current Step")
-            print("LR End ", lr_end)
             lr_range = lr_init - lr_end
             decay_steps = num_training_steps - num_warmup_steps
             pct_remaining = 1 - (current_step - num_warmup_steps) / decay_steps
@@ -395,7 +393,6 @@ def random_high_freq(latents):
             # Assign the rotated checkerboard to the output tensor
             output[i, j] = resized_checkerboard.squeeze()
 
-    print(output.shape)
     return output
 
 
@@ -1742,7 +1739,7 @@ def main(args):
                 elif args.gamma_offset_noise:
                     noise = gamma_offset_noise(latents)
                 elif args.pyramid_noise:
-                    noise = pyramid_noise_like(x, discount=0.8)
+                    noise = pyramid_noise_like(x, discount=0.3)
                 else:
                     noise = torch.randn_like(latents)
                 bsz = latents.shape[0]
