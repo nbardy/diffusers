@@ -195,32 +195,6 @@ def get_random_instruct():
 directory = "/home/paperspace/datasets/aux_images_1/data_1"
 
 
-def load_embeddings(cache_dir):
-    instruction_cache_path = os.path.join(cache_dir, "instruction_embeddings.pt")
-    if not os.path.exists(instruction_cache_path):
-        raise FileNotFoundError(f"Instruction embeddings not found in {instruction_cache_path}")
-
-    instruction_map = torch.load(instruction_cache_path)
-
-    image_text_map = {}
-
-    for file_name in os.listdir(cache_dir):
-        if file_name.endswith("_image_embedding.pt"):
-            image_file = file_name[:-len("_image_embedding.pt")]
-            image_cache_path = os.path.join(cache_dir, f"{image_file}_image_embedding.pt")
-            text_cache_path = os.path.join(cache_dir, f"{image_file}_text_embedding.pt")
-
-            if not os.path.exists(text_cache_path):
-                raise FileNotFoundError(f"Text embeddings not found in {text_cache_path}")
-
-            image_embedding = torch.load(image_cache_path).numpy()
-            text_embedding = torch.load(text_cache_path).numpy()
-
-            image_text_map[image_file] = {"image_embedding": image_embedding, "text_embedding": text_embedding}
-
-    return instruction_map, image_text_map
-
-
 def create_faiss_indices(instruction_map, image_text_map, clip_model):
     aux_image_embeddings = [entry["image_embedding"] for entry in image_text_map.values()]
     aux_text_embeddings = [entry["text_embedding"] for entry in image_text_map.values()]
