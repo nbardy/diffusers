@@ -156,22 +156,19 @@ prompts_with_size = [
 
 # Define instructions
 instructions = [
-    "Make an image from the given text prompt: <prompt>",
+    "Make an image from the given text prompt",
     "Make an image from the image",
     "Make an image from 5 related concepts",
 ]
-instructions_detailed = (
-    {
-        "img2text": {
-            "prompt": "Make an image from the given text prompt: <prompt>",
-        },
-        "img2img": {"prompt": "Make an image from the image"},
-        "mix": {"prompt": "Make an image from the assets"},
+instructions_detailed = {
+    "img2text": {
+        "prompt": "Make an image from the given text prompt",
     },
-)
+    "img2img": {"prompt": "Make an image from the image"},
+    "mix": {"prompt": "Make an image from the assets"},
+}
 
 
-# if
 # Takes a random instruction at 33% probability
 # - img2text: 0.33
 # - text2img: 0.33
@@ -1525,6 +1522,9 @@ def main(args):
                 continue
 
             with accelerator.accumulate(unet):
+                # Convert images to latent space
+                latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
+                latents = latents * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
                 if args.pink_noise:
@@ -1541,10 +1541,6 @@ def main(args):
                     noise = pyramid_noise_like(latents, discount=0.8)
                 else:
                     noise = torch.randn_like(latents)
-
-                # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
-                latents = latents * vae.config.scaling_factor
 
                 # aux_image_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
                 # aux_text_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
@@ -1572,7 +1568,11 @@ def main(args):
 
                         instruct = get_random_instruct()
 
+                        # debug
+                        print(instructions_detailed, instruct)
                         prompt = instructions_detailed[instruct]["prompt"]
+                        print("prompt")
+                        print(prompt)
                         # preprocess the prompt
                         prompt = clip_processor(text=prompt, return_tensors="pt")
                         instruct_prompt_hidden_states = text_encoder(prompt)[0]
