@@ -161,7 +161,7 @@ instructions = [
     "Make an image from 5 related concepts",
 ]
 instructions_detailed = {
-    "img2text": {
+    "txt2img": {
         "prompt": "Make an image from the given text prompt",
     },
     "img2img": {"prompt": "Make an image from the image"},
@@ -170,18 +170,15 @@ instructions_detailed = {
 
 
 # Takes a random instruction at 33% probability
-# - img2text: 0.33
-# - text2img: 0.33
-# - mix: 0.33
 def get_random_instruct():
     import random
 
     instruct_type = None
     r = random.random()
     if r < 0.33:
-        instruct_type = "img2text"
+        instruct_type = "txt2img"
     elif r < 0.66:
-        instruct_type = "text2img"
+        instruct_type = "img2img"
     else:
         instruct_type = "mix"
 
@@ -1071,9 +1068,8 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
 
                 # Function for organization
 
-                def get_prompt_emebds():
+                def get_prompt_embeds(instruct):
                     # TODO: add all tests for each type including mix
-                    instruct = "text2img"
 
                     instruct_prompt = instructions_detailed[instruct]["prompt"]
 
@@ -1099,7 +1095,7 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                         )
                         return instuct_hidden_states
 
-                prompt_emebds = get_prompt_embeds()
+                prompt_emebds = get_prompt_embeds("txt2img")
 
                 images = pipeline(
                     prompt_embeds=prompt_embeds,
@@ -1563,9 +1559,7 @@ def main(args):
                     all_states = []
                     for i, pixels in enumerate(pixel_values):
                         # slice only the ith element
-                        input_ids = batch["input_ids"][i]
-                        input_ids = [input_ids]
-
+                        input_ids = batch["input_ids"][i].unsqueeze(0)
                         instruct = get_random_instruct()
 
                         # debug
@@ -1574,8 +1568,11 @@ def main(args):
                         print("prompt")
                         print(prompt)
                         # preprocess the prompt
-                        prompt = clip_processor(text=prompt, return_tensors="pt")
-                        instruct_prompt_hidden_states = text_encoder(prompt)[0]
+                        prompt = clip_processor(text=[prompt], return_tensors="pt")
+                        print("prompt2")
+                        print(prompt)
+                        instruct_prompt_hidden_states = text_encoder(prompt["input_ids"].to(device))[0]
+
 
                         if instruct == "txt2img":
                             text_hidden_states = text_encoder(input_ids)[0]
@@ -1596,6 +1593,7 @@ def main(args):
                             all_states.append(instruct_hidden_states)
 
                         elif instruct == "img2img":
+                            image = (pixel_values + 1) / 2
                             image_inputs = clip_processor(images=image, return_tensors="pt")
                             image_embedding = clip_model.get_image_features(**image_inputs.to(device))
 
@@ -1615,6 +1613,7 @@ def main(args):
                             all_states.append(instruct_hidden_states)
 
                         elif instruct == "mix":
+                            image = (pixel_values + 1 ) / 2
                             image_input = clip_processor(images=image, return_tensors="pt")
                             image_embedding = clip_model.get_image_features(**image_input.to(device))
 
@@ -1634,11 +1633,11 @@ def main(args):
                             # Query aux_image_index
                             # Get 3 nearest neighbors
                             _, image_neighbors = aux_image_index.search(
-                                image_embedding.cpu().numpy(), num_image_to_search
+                                image_embedding.detach().numpy(), num_image_to_search
                             )
                             # Get 2 nearest text neighbors
                             _, text_neighbors = aux_text_index.search(
-                                text_hidden_states.cpu().numpy(), num_text_to_search
+                                text_hidden_states.detach().numpy(), num_text_to_search
                             )
                             # Get the embeddings of the neighbors
                             image_neighbors = torch.tensor(image_neighbors).to(device)
