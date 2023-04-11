@@ -64,14 +64,14 @@ from diffusers import StableDiffusionPipeline
 
 prompts_with_size = [
     {
-        "prompt": "Perfect Breaking wave shapes; A dramatic breaking wave; tilt-shift zoom; film; super image; AR: 1024x768",
+        "prompt": "Perfect Breaking wave shapes; A dramatic breaking wave; tilt-shift zoom; film; super image; AR: 4:3",
         "negativePrompt": "bad wave, bad wave shape, bad wave; bad image; bad crop; bad image; zoom crop; random crop",
         "size": (1024, 768),
     },
     {
-        "prompt": "a full body photo of 25 y.o brown tan skinned American woman with glasses, Short Curly hair, wearing gypsy style clothes, modestly clothed, fully clothed, background is in traditional Turkish house, high detailed skin, realistic sunlight lighting, thick thigh, wide hips, visible face pores, AR: 768x1152",
+        "prompt": "a full body photo of 25 y.o brown tan skinned American woman with glasses, Short Curly hair, wearing gypsy style clothes, modestly clothed, fully clothed, background is in traditional Turkish house, high detailed skin, realistic sunlight lighting, thick thigh, wide hips, visible face pores, AR: 3:4",
         "negativePrompt": "deformed iris, deformed pupils, semi-realistic, CGI, 3d, render, sketch, cartoon, drawing, anime, text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, erotic, sexy, nudity, half-naked, half naked, camera flash, oversaturated, hard lighting, diffuser lighting",
-        "size": (768, 1024 + 64 * 2)
+        "size": (768, 1024)
     },
     {
         "prompt": "A dramatic wave breaking; super image; super wave AR: 1024x768",
@@ -79,86 +79,104 @@ prompts_with_size = [
         "size": (1024, 768),
     },
     {
-        "prompt": "Storied Sorrows, A women sits beneath a soft light, sobbing in a chair, dimly lit hotel room; film; super image; good crop AR: 1280x960",
+        "prompt": "Storied Sorrows, A women sits beneath a soft light, sobbing in a chair, dimly lit hotel room; film; super image; good crop AR: 4:3",
         "negativePrompt": "bad image, bad crop, zoom crop, random crop, bad lighting, bad film, bad angle, misformed person, bad person, bad people",
-        "size": (1024 + 64 * 4, 768 + 3 * 64),
+        "size": (1024, 768),
     },
     {
-        "prompt": "a cute bird; super image, AR: 768x768",
+        "prompt": "a cute bird; super image; good crop, AR: 1:1",
         "size": (768, 768),
-        "negativePrompt": "bad image"
+        "negativePrompt": "bad image; bad crop"
     },
     {
-        "prompt": "a smiling woman; super image, AR: 768x768",
-        "size": (768, 768),
-        "negativePrompt": "bad image, bad crop, bad zoom"
+        "prompt": "a smiling woman; super image, super eyes; AR: 4:3",
+        "size": (768, 512),
+        "negativePrompt": "bad image, bad crop, bad zoom, bad eyes, bad face"
     },
-    {"prompt": "Stunning potrait of a Liquid Chrome Gravity Sculpture; super image; realistic; fantasy; super fantasy; photo, AR: 768x1152", "size": (768, 1024 + 64 * 4)},
     {
-        "prompt": "Cyber eye; portrait of a warrior princess; Jeweled Crown; super image; dramatic fisheye; AR: 768x896",
-        "size": (768, 768 + 64 * 2),
+        "prompt": "Cyber eye; a warrior princess; Jeweled Crown; super image; dramatic fisheye; cool crop; unique good crop; AR: 3:4",
+        "size": (512, 768),
         "negativePrompt": "bad image, zoom crop, bad crop"
     },
     {
-        "prompt": "A cat that looks like a bear; super animal; super image; realistic; good crop AR: 768x884",
+        "prompt": "A cat that looks like a bear; super animal; super image; realistic; good crop AR: 4:5",
         "size": (768, 884),
         "negativePrompt": "bad image, zoom crop, bad crop; lowres, low quality, bad angle, misformed animal, misformed person"
     },
     {
-        "prompt": "The end of the world, Nucleur Apocolypse, Starfish on a Beach; super film; super image; realistic",
-        "size": (1024 + 64*3, 884),
-        "negativePrompt": "bad image, bad film, zoom crop, bad crop"
-    },
-    {
-        "prompt": "Barren Scowls; film; super image; super camera angle; good crop, AR: 1216x884", "size": (1024 + 64*3, 884),
+        "prompt": "Barren Scowls; film; super image; super camera angle; good crop, AR: 4:3",
+        "size": (1024, 768),
         "negativePrompt": "bad image, bad crop; bad film, bad camera angle; misformed faces, misaligned eyes, malformed faces, malformed limbs, misformed animal"
     },
     {
-        "prompt": "A leopard fights a man; film; super realistic; super image; dratmatic shot; good crop; AR: 1216x884",
-        "size": (1024 + 64*3, 884),
+        "prompt": "A leopard fights a man; film; super realistic; super image; dratmatic shot; good crop; AR: 4:3",
+        "size": (1024, 768),
         "negativePrompt": "bad image, bad painting, zoom crop, bad crop, lowres; low quality, too dark, too bright; ugly, misformed person; misformed animal",
     },
     {
-        "prompt": "Halls of Space, scifi, digital painting; super painting; super image; AR: 768x1024, painterly",
+        "prompt": "Halls of Space, scifi, digital painting; super painting; super image; AR: 4:3, painterly",
         "negativePrompt": "bad painting, bad image; bad crop; zoom crop; random crop",
-        "size": (768, 1024),
+        "size": (1024, 768),
     },
     {
-        "prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner, AR: 1024x884",
+        "prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner, AR: 3:4",
         "negativePrompt": "bad people, malformed people, misfigured persons",
         "size": (1024, 884),
     },
     {
-        "prompt": "portrait of obama; super image; super photo, good crop AR: 702x884",
+        "prompt": "portrait of obama; super image; super photo, good crop AR: 3:4",
         "size": (702, 884),
         "negativePrompt": "bad image, bad crop, zoom crop, bad person, bad eyes, misaligned eyes, malformed person",
     },
     {
-        "prompt": "A mystical dragon walrus super animal hybrid, fantasy; super image; painterly ; good crop AR: 1024x768",
+            "prompt": "A mystical dragon walrus super animal hybrid, fantasy; super image; super film; super photo; realistic; painterly ; good crop AR: 4:3",
         "negativePrompt": "cropped image, misfigured animal, bad painting, misfigured person, ugly limbs, zoom crop; bad crop; center crop",
         "size": (1024, 768)
     },
     {
-        "prompt": "He Roars within his kingdom; A mystical dragon rpg; super image; realistic; super realistic, AR: 1024x768",
+        "prompt": "He Roars within his kingdom; A mystical dragon rpg; super image; realistic; super realistic, AR: 4:3",
         "negativePrompt": "cropped image, bad animal, bad painting",
         "size": (1024, 768)
     },
     {
-        "prompt": "Bizzare Magical Landscape; fantasy; rpg; high aesthetic; super image",
+        "prompt": "Bizzare Magical Landscape; fantasy; rpg; high aesthetic; super image; AR: 3:4",
         "negativePrompt": "bad image, bad crop",
         "size": (768, 1024)
     },
     {
-        "prompt": "Cyberpunk Chipmunk; super image; super animal; AR: 512x768",
+        "prompt": "Cyberpunk Chipmunk; super image; super animal; AR: 2:3",
         "negativePrompt": "bad image, bad crop",
         "size": (512, 768)
     },
     {
-        "prompt": "Cyberpunk Hedgehog; super image; super animal, good crop AR: 256x512",
+        "prompt": "Cyberpunk Chipmunk; super image; super animal; AR: 1:1",
         "negativePrompt": "bad image, bad crop",
-        "size": (256, 512)
+        "size": (256, 256)
     },
+    {
+        "prompt": "Cyberpunk Hedgehog; super image; super animal, good crop AR: 3:4",
+        "negativePrompt": "bad image, bad crop",
+        "size": (384 , 512)
+    },
+
 ]
+tags = [
+    "nerd product",
+    "high fashion person",
+    "high fashion product",
+    "high architecture",
+    "modern",
+    "minimal"
+]
+
+for tag in tags:
+    prompts_with_size.append(
+        {
+            "prompt": f"{tag}; super image, AR: 1:1",
+            "negativePrompt": "bad image, bad crop",
+            "size": (512, 512)
+        }
+    )
 
 
 
@@ -198,8 +216,6 @@ def get_polynomial_decay_schedule_with_warmup(
         elif current_step > num_training_steps:
             return lr_end / lr_init  # as LambdaLR multiplies by lr_init
         else:
-            print("Current Step")
-            print("LR End ", lr_end)
             lr_range = lr_init - lr_end
             decay_steps = num_training_steps - num_warmup_steps
             pct_remaining = 1 - (current_step - num_warmup_steps) / decay_steps
@@ -377,7 +393,6 @@ def random_high_freq(latents):
             # Assign the rotated checkerboard to the output tensor
             output[i, j] = resized_checkerboard.squeeze()
 
-    print(output.shape)
     return output
 
 
@@ -926,8 +941,6 @@ class DreamBoothDataset(Dataset):
 
         all_files = [f for f in self.instance_data_root.glob('**/*')]
         self.num_instance_images = len(all_files)
-        print("=====")
-        print("Instance Image count: " + str(self.num_instance_images))
         self.instance_prompt = instance_prompt
 
         self.use_filename_as_label = use_filename_as_label
@@ -955,8 +968,9 @@ class DreamBoothDataset(Dataset):
         example = {}
         aspect_ratio_index = random.choices(range(len(self.aspect_ratio_dirs)), weights=self.folder_weights)[0]
         aspect_ratio_dir = self.aspect_ratio_dirs[aspect_ratio_index]
-        image_files = list((self.instance_data_root / aspect_ratio_dir).iterdir())
-        superimage_files = list((self.super_image_dir / aspect_ratio_dir).iterdir())
+        aspect_ratio_dir_name = Path(aspect_ratio_dir).name
+        image_files = list((self.instance_data_root / aspect_ratio_dir_name).iterdir())
+        superimage_files = list((self.super_image_dir / aspect_ratio_dir_name).iterdir())
 
         width, height = map(int, aspect_ratio_dir.name.split("x"))
         batch_size_adjust = (512 * 512) / (width * height)
@@ -990,22 +1004,32 @@ class DreamBoothDataset(Dataset):
             )
             prompt = get_label_from_txt(path) if self.use_txt_as_label else prompt
 
-            prompt = prompt + f"; AR: {aspect_ratio_dir}"
 
+            def minimal_aspect_ratio(path):
+                filename = Path(path).name
+                width, height = map(int, filename.split('x'))
+                fraction = Fraction(width, height)
+                return f"{fraction.numerator}:{fraction.denominator}"
+
+            aspect = minimal_aspect_ratio(aspect_ratio_dir)
+            prompt = prompt + f"; AR: {aspect}"
 
             if os.path.exists(abs_path):
-                instance_image = Image.open(abs_path)
-                if not instance_image.mode == "RGB":
-                    instance_image = instance_image.convert("RGB")
+                try:
+                    instance_image = Image.open(abs_path)
+                    if not instance_image.mode == "RGB":
+                        instance_image = instance_image.convert("RGB")
 
-                images.append(self.image_transforms(instance_image))
-                prompt_ids.append(self.tokenizer(
-                    prompt,
-                    truncation=True,
-                    padding="max_length",
-                    max_length=self.tokenizer.model_max_length,
-                    return_tensors="pt",
-                ).input_ids)
+                    images.append(self.image_transforms(instance_image))
+                    prompt_ids.append(self.tokenizer(
+                        prompt,
+                        truncation=True,
+                        padding="max_length",
+                        max_length=self.tokenizer.model_max_length,
+                        return_tensors="pt",
+                    ).input_ids)
+                except Exception as e:
+                    print(f"Error loading image {image_path}: {e}")
             else:
                 print(f"File not found: {abs_path}")
 
@@ -1188,6 +1212,8 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                     step=step,
                 )
 
+from pathlib import Path
+from fractions import Fraction
 
 def main(args):
     logging_dir = Path(args.logging_dir)

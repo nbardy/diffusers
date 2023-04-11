@@ -1,5 +1,18 @@
-import wandb
-from torch import functional as DF
+#!/usr/bin/env python
+# coding=utf-8
+# Copyright 2023 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+
 import argparse
 import hashlib
 import itertools
@@ -30,7 +43,14 @@ import kornia
 
 
 import diffusers
-from diffusers import AutoencoderKL, DDPMScheduler, DiffusionPipeline, UNet2DConditionModel
+from diffusers import (
+    AutoencoderKL,
+    DDPMScheduler,
+    DiffusionPipeline,
+    UNet2DConditionModel,
+    DPMSolverMultistepScheduler,
+    EulerAncestralDiscreteScheduler
+)
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version
 from diffusers.utils.import_utils import is_xformers_available
@@ -41,193 +61,138 @@ from torch.distributions import Gamma
 
 from diffusers import StableDiffusionPipeline
 
-import os
-import faiss
-import torch
-import numpy as np
-from PIL import Image
-import requests
-from transformers import CLIPProcessor, CLIPModel
-import torch
-
-# Initialize auxiliary label pool embeddings
-aux_image_embeddings = []
-aux_text_embeddings = []
-instruction_map = {}
-
-# Define a function to load images and perform pre-processing
-
-
-def load_image(path):
-    image = Image.open(path)
-    return image
-
-
-# Load the clip_model and processor
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-clip_model = CLIPModel.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K").to(device)
-clip_processor = CLIPProcessor.from_pretrained("laion/CLIP-ViT-H-14-laion2B-s32B-b79K")
-
-# Accepts an item from the dataset and returns a random instruction version o
-
-
-def pre_compute(directory, image_files, instructions, cache_dir):
-    image_files = image_files[:200]  # Only process the first 200 images
-
-    if not os.path.exists(cache_dir):
-        os.makedirs(cache_dir)
-
-    cache_path = os.path.join(cache_dir, "embeddings_cache.pt")
-
-    if not os.path.exists(cache_path):
-        instruction_map = {}
-        image_text_map = {}
-
-        for instruction in instructions:
-            # Get the instruction embedding
-            instruction_inputs = clip_processor(text=[instruction], return_tensors="pt", padding=True)
-            with torch.no_grad():
-                instruction_embedding = clip_model.get_text_features(**instruction_inputs.to(device))
-            instruction_embedding /= instruction_embedding.norm(dim=-1, keepdim=True)
-            instruction_map[instruction] = instruction_embedding.cpu()
-
-        for image_file in image_files:
-            image_path = os.path.join(directory, image_file)
-
-            # Get the image embedding
-            image = load_image(image_path)
-            image_inputs = clip_processor(images=image, return_tensors="pt")
-            with torch.no_grad():
-                image_embedding = clip_model.get_image_features(**image_inputs.to(device))
-            image_embedding /= image_embedding.norm(dim=-1, keepdim=True)
-
-            # Get the text embedding
-            text = image_file
-            text_inputs = clip_processor(text=[text], return_tensors="pt", padding=True, truncation=True)
-            with torch.no_grad():
-                text_embedding = clip_model.get_text_features(**text_inputs.to(device))
-            text_embedding /= text_embedding.norm(dim=-1, keepdim=True)
-
-            image_text_map[image_file] = {"image_embedding": image_embedding.cpu(), "text_embedding": text_embedding.cpu()}
-
-        # Save all embeddings to a single cache file
-        torch.save({"instruction_map": instruction_map, "image_text_map": image_text_map}, cache_path)
-
-
-def load_embeddings(cache_dir):
-    cache_path = os.path.join(cache_dir, "embeddings_cache.pt")
-    if not os.path.exists(cache_path):
-        raise FileNotFoundError(f"Embeddings cache not found in {cache_path}")
-
-    embeddings_cache = torch.load(cache_path)
-    instruction_map = embeddings_cache["instruction_map"]
-    image_text_map = embeddings_cache["image_text_map"]
-
-    return instruction_map, image_text_map
-
 
 prompts_with_size = [
     {
-        "prompt": "super breaking wave, super perfect wave shape, super wave detail, super image ",
-        "negativePrompt": "bad wave, bad wave shape, bad wave ",
-        "size": (1014, 768),
+        "prompt": "Perfect Breaking wave shapes; A dramatic breaking wave; tilt-shift zoom; film; super image; AR: 4:3",
+        "negativePrompt": "bad wave, bad wave shape, bad wave; bad image; bad crop; bad image; zoom crop; random crop",
+        "size": (1024, 768),
     },
-    {"prompt": "a cute bird", "size": (768, 768)},
-    {"prompt": "a cute bird, high aesthetic", "size": (768, 768)},
-    {"prompt": "a cute bird, high aesthetic; super image", "size": (768, 768)},
-    {"prompt": "A women smiling", "size": (768, 1024)},
-    {"prompt": "A women smiling; super image", "size": (768, 1024)},
-    {"prompt": "A women smiling; super image, high aesthetic", "size": (768, 1024)},
-    {"prompt": "super image", "size": (702, 884)},
-    {"prompt": "image", "size": (702, 884)},
     {
-        "prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner",
+        "prompt": "a full body photo of 25 y.o brown tan skinned American woman with glasses, Short Curly hair, wearing gypsy style clothes, modestly clothed, fully clothed, background is in traditional Turkish house, high detailed skin, realistic sunlight lighting, thick thigh, wide hips, visible face pores, AR: 3:4",
+        "negativePrompt": "deformed iris, deformed pupils, semi-realistic, CGI, 3d, render, sketch, cartoon, drawing, anime, text, close up, cropped, out of frame, worst quality, low quality, jpeg artifacts, ugly, duplicate, morbid, mutilated, extra fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, blurry, dehydrated, bad anatomy, bad proportions, extra limbs, cloned face, disfigured, gross proportions, malformed limbs, missing arms, missing legs, extra arms, extra legs, fused fingers, too many fingers, long neck, erotic, sexy, nudity, half-naked, half naked, camera flash, oversaturated, hard lighting, diffuser lighting",
+        "size": (768, 1024)
+    },
+    {
+        "prompt": "A dramatic wave breaking; super image; super wave AR: 1024x768",
+        "negativePrompt": "lowres, bad image, bad corp, zoom crop, error, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, blurry, ugly",
+        "size": (1024, 768),
+    },
+    {
+        "prompt": "Storied Sorrows, A women sits beneath a soft light, sobbing in a chair, dimly lit hotel room; film; super image; good crop AR: 4:3",
+        "negativePrompt": "bad image, bad crop, zoom crop, random crop, bad lighting, bad film, bad angle, misformed person, bad person, bad people",
+        "size": (1024, 768),
+    },
+    {
+        "prompt": "a cute bird; super image; good crop, AR: 1:1",
+        "size": (768, 768),
+        "negativePrompt": "bad image; bad crop"
+    },
+    {
+        "prompt": "a smiling woman; super image, super eyes; AR: 4:3",
+        "size": (768, 512),
+        "negativePrompt": "bad image, bad crop, bad zoom, bad eyes, bad face"
+    },
+    {
+        "prompt": "Cyber eye; a warrior princess; Jeweled Crown; super image; dramatic fisheye; cool crop; unique good crop; AR: 3:4",
+        "size": (512, 768),
+        "negativePrompt": "bad image, zoom crop, bad crop"
+    },
+    {
+        "prompt": "A cat that looks like a bear; super animal; super image; realistic; good crop AR: 4:5",
+        "size": (768, 884),
+        "negativePrompt": "bad image, zoom crop, bad crop; lowres, low quality, bad angle, misformed animal, misformed person"
+    },
+    {
+        "prompt": "Barren Scowls; film; super image; super camera angle; good crop, AR: 4:3",
+        "size": (1024, 768),
+        "negativePrompt": "bad image, bad crop; bad film, bad camera angle; misformed faces, misaligned eyes, malformed faces, malformed limbs, misformed animal"
+    },
+    {
+        "prompt": "A leopard fights a man; film; super realistic; super image; dratmatic shot; good crop; AR: 4:3",
+        "size": (1024, 768),
+        "negativePrompt": "bad image, bad painting, zoom crop, bad crop, lowres; low quality, too dark, too bright; ugly, misformed person; misformed animal",
+    },
+    {
+        "prompt": "Halls of Space, scifi, digital painting; super painting; super image; AR: 4:3, painterly",
+        "negativePrompt": "bad painting, bad image; bad crop; zoom crop; random crop",
+        "size": (1024, 768),
+    },
+    {
+        "prompt": "The friend inside your mind; Anthony bourdain and Obama enjoying dinner at a diner, AR: 3:4",
+        "negativePrompt": "bad people, malformed people, misfigured persons",
         "size": (1024, 884),
     },
-    {"prompt": "portrait of obama; super image", "size": (702, 884)},
-    {"prompt": "super image", "negativePrompt": "cropped image", "size": (1024, 768)},
-    {"prompt": "high aesthetic; super image", "negativePrompt": "cropped", "size": (768, 1024)},
     {
-        "prompt": "high aesthetic; super image; A photo of Obama at a Diner with Anthony Bourdain; Black and White Photo",
-        "negativePrompt": "image; cropped",
-        "size": (768, 1024),
+        "prompt": "portrait of obama; super image; super photo, good crop AR: 3:4",
+        "size": (702, 884),
+        "negativePrompt": "bad image, bad crop, zoom crop, bad person, bad eyes, misaligned eyes, malformed person",
     },
+    {
+            "prompt": "A mystical dragon walrus super animal hybrid, fantasy; super image; super film; super photo; realistic; painterly ; good crop AR: 4:3",
+        "negativePrompt": "cropped image, misfigured animal, bad painting, misfigured person, ugly limbs, zoom crop; bad crop; center crop",
+        "size": (1024, 768)
+    },
+    {
+        "prompt": "He Roars within his kingdom; A mystical dragon rpg; super image; realistic; super realistic, AR: 4:3",
+        "negativePrompt": "cropped image, bad animal, bad painting",
+        "size": (1024, 768)
+    },
+    {
+        "prompt": "Bizzare Magical Landscape; fantasy; rpg; high aesthetic; super image; AR: 3:4",
+        "negativePrompt": "bad image, bad crop",
+        "size": (768, 1024)
+    },
+    {
+        "prompt": "Cyberpunk Chipmunk; super image; super animal; AR: 2:3",
+        "negativePrompt": "bad image, bad crop",
+        "size": (512, 768)
+    },
+    {
+        "prompt": "Cyberpunk Chipmunk; super image; super animal; AR: 1:1",
+        "negativePrompt": "bad image, bad crop",
+        "size": (256, 256)
+    },
+    {
+        "prompt": "Cyberpunk Hedgehog; super image; super animal, good crop AR: 3:4",
+        "negativePrompt": "bad image, bad crop",
+        "size": (384 , 512)
+    },
+
+]
+tags = [
+    "nerd product",
+    "high fashion person",
+    "high fashion product",
+    "high architecture",
+    "modern",
+    "minimal"
 ]
 
-# Define instructions
-instructions = [
-    "Make an image from the given text prompt",
-    "Make an image from the image",
-    "Make an image from 5 related concepts",
-]
-instructions_detailed = {
-    "txt2img": {
-        "prompt": "Make an image from the given text prompt",
-    },
-    "img2img": {"prompt": "Make an image from the image"},
-    "mix": {"prompt": "Make an image from the assets"},
-}
+for tag in tags:
+    prompts_with_size.append(
+        {
+            "prompt": f"{tag}; super image, AR: 1:1",
+            "negativePrompt": "bad image, bad crop",
+            "size": (512, 512)
+        }
+    )
 
-
-# Takes a random instruction at 33% probability
-def get_random_instruct():
-    import random
-
-    instruct_type = None
-    r = random.random()
-    if r < 0.33:
-        instruct_type = "txt2img"
-    elif r < 0.66:
-        instruct_type = "img2img"
-    else:
-        instruct_type = "mix"
-
-    return instruct_type
-
-
-# Load and precompute embeddings
-directory = "/home/paperspace/datasets/aux_images_1/data_1"
-
-
-def create_faiss_indices(instruction_map, image_text_map, clip_model):
-    aux_image_embeddings = [entry["image_embedding"] for entry in image_text_map.values()]
-    aux_text_embeddings = [entry["text_embedding"] for entry in image_text_map.values()]
-
-    # Create separate FAISS indices for images and texts
-    aux_image_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
-    aux_text_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
-
-    # Add embeddings to the indices
-    aux_image_index.add(np.vstack(aux_image_embeddings))
-    aux_text_index.add(np.vstack(aux_text_embeddings))
-
-    return aux_image_index, aux_text_index
-
-
-image_files = os.listdir(directory)
-cache_dir = "knn_embedding_cache"
-pre_compute(directory, image_files, instructions, cache_dir)
-
-instruction_map, image_text_map = load_embeddings(cache_dir)
-aux_image_index, aux_text_index = create_faiss_indices(instruction_map, image_text_map, clip_model)
 
 
 def get_polynomial_decay_schedule_with_warmup(
-    optimizer, num_warmup_steps, num_training_steps, lr_end=1e-7, power=1.0, last_epoch=-1
+    optimizer,
+    num_warmup_steps,
+    num_training_steps,
+    lr_end=1e-7,
+    power=1.0,
+    last_epoch=-1,
 ):
     """
-    Create a schedule with a learning rate that decreases as a polynomial decay from the initial lr set in the
-    optimizer to end lr defined by *lr_end*, after a warmup period during which it increases linearly from 0 to the
-    initial lr set in the optimizer.
-    Args:
         optimizer ([`~torch.optim.Optimizer`]):
-            The optimizer for which to schedule the learning rate.
         num_warmup_steps (`int`):
-            The number of steps for the warmup phase.
         num_training_steps (`int`):
-            The total number of training steps.
         lr_end (`float`, *optional*, defaults to 1e-7):
-            The end LR.
         power (`float`, *optional*, defaults to 1.0):
             Power factor.
         last_epoch (`int`, *optional*, defaults to -1):
@@ -241,7 +206,9 @@ def get_polynomial_decay_schedule_with_warmup(
 
     lr_init = optimizer.defaults["lr"]
     if not (lr_init > lr_end):
-        raise ValueError(f"lr_end ({lr_end}) must be be smaller than initial lr ({lr_init})")
+        raise ValueError(
+            f"lr_end ({lr_end}) must be be smaller than initial lr ({lr_init})"
+        )
 
     def lr_lambda(current_step: int):
         if current_step < num_warmup_steps:
@@ -253,12 +220,19 @@ def get_polynomial_decay_schedule_with_warmup(
             decay_steps = num_training_steps - num_warmup_steps
             pct_remaining = 1 - (current_step - num_warmup_steps) / decay_steps
             decay = lr_range * pct_remaining**power + lr_end
-            return decay / lr_init  # as LambdaLR multiplies by lr_init
+            lr = decay / lr_init  # as LambdaLR multiplies by lr_init
+
+            return lr
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
 logger = get_logger(__name__)
+
+import math
+
+from dctorch import functional as DF
+import torch
 
 
 def sqrtm(x):
@@ -266,7 +240,9 @@ def sqrtm(x):
     return vecs * vals.sqrt() @ vecs.T
 
 
-def colored_noise(shape, power=2.0, mean=None, color=None, device="cpu", dtype=torch.float32):
+def colored_noise(
+    shape, power=2.0, mean=None, color=None, device="cpu", dtype=torch.float32
+):
     mean = torch.zeros([shape[-3]]) if mean is None else mean
     color = torch.eye(shape[-3]) if color is None else color
     f_h = math.pi * torch.arange(shape[-2], device=device, dtype=dtype) / shape[-2]
@@ -294,7 +270,8 @@ def make_pink_noise(latents):
     power = 2.4477
     mean = torch.tensor([0.4811, 0.4575, 0.4078], device=latents.device)
     cov = torch.tensor(
-        [[0.0802, 0.0700, 0.0631], [0.0700, 0.0763, 0.0721], [0.0631, 0.0721, 0.0839]], device=latents.device
+        [[0.0802, 0.0700, 0.0631], [0.0700, 0.0763, 0.0721], [0.0631, 0.0721, 0.0839]],
+        device=latents.device,
     )
 
     x = colored_noise(latents.shape, power, device=latents.device)
@@ -304,15 +281,23 @@ def make_pink_noise(latents):
 # Takes the ideas from offset noise(1) and adds uses two gamma distributions to
 # alter the noise schedule adding different amounts of offset noise at different frequencies
 # [1] https://www.crosslabs.org/blog/diffusion-with-offset-noise
-def gamma_offset_noise(latents):
+def gamma_offset_noise(latents, discount=1.0):
     device = latents.device
-    g2 = torch.clamp(random_gamma((latents.shape[0], latents.shape[1], 1, 1), alpha=0.5, beta=10), 0, 1).to(device)
+    g2 = torch.clamp(
+        random_gamma((latents.shape[0], latents.shape[1], 1, 1), alpha=0.5, beta=10),
+        0,
+        1,
+    ).to(device)
 
     # g1 is the random freq
     # g2 is the proportion to shift the noise
     noise = torch.randn_like(latents, device=latents.device)
-    return torch.randn_like(latents) + g2 * torch.randn(latents.shape[0], latents.shape[1], 1, 1)
+    thick_noise = torch.randn(
+        latents.shape[0], latents.shape[1], 1, 1,
+        device=device
+    )
 
+    return noise + discount * g2 * thick_noise
 
 def create_checkerboard_pixels(pixel_w, pixel_h, block_size):
     # Compute the checkerboard grid size and block size in pixels
@@ -327,7 +312,9 @@ def create_checkerboard_pixels(pixel_w, pixel_h, block_size):
     # Create a checkerboard pattern using small tiles
     pattern = torch.tensor([[1.0, -1.0], [-1.0, 1.0]])
     tile = pattern.view(1, 2, 2).repeat(1, pixel_block_size, pixel_block_size)
-    tile = F.interpolate(tile.unsqueeze(0), size=(tile_h, tile_w), mode="bilinear").squeeze()
+    tile = F.interpolate(
+        tile.unsqueeze(0), size=(tile_h, tile_w), mode="bilinear"
+    ).squeeze()
 
     # Repeat the pattern to create the checkerboard grid
     checkerboard = tile.repeat(grid_h, grid_w)
@@ -335,13 +322,17 @@ def create_checkerboard_pixels(pixel_w, pixel_h, block_size):
 
     # Apply antialiasing to the checkerboard grid
     checkerboard = F.interpolate(
-        checkerboard.unsqueeze(0).unsqueeze(0), size=(output_h, output_w), mode="bilinear"
+        checkerboard.unsqueeze(0).unsqueeze(0),
+        size=(output_h, output_w),
+        mode="bilinear",
     ).squeeze()
 
     # Apply a half cell offset
     row_offset = block_size // 2
     col_offset = block_size // 2
-    checkerboard = torch.roll(checkerboard, shifts=(row_offset, col_offset), dims=(0, 1))
+    checkerboard = torch.roll(
+        checkerboard, shifts=(row_offset, col_offset), dims=(0, 1)
+    )
 
     return checkerboard.unsqueeze(0)
 
@@ -351,15 +342,21 @@ def rotate_3d_and_project(checkerboard, angle, padding_mode="zeros"):
     device = checkerboard.device
 
     # Create a 3x3 rotation matrix around the Z-axis
-    angle_rad = torch.tensor(angle * (3.14159265 / 180.0), dtype=torch.float32, device=device)
+    angle_rad = torch.tensor(
+        angle * (3.14159265 / 180.0), dtype=torch.float32, device=device
+    )
     cos_angle, sin_angle = torch.cos(angle_rad), torch.sin(angle_rad)
     rotation_matrix = torch.tensor(
-        [[cos_angle, -sin_angle, 0], [sin_angle, cos_angle, 0], [0, 0, 1]], device=device
+        [[cos_angle, -sin_angle, 0], [sin_angle, cos_angle, 0], [0, 0, 1]],
+        device=device,
     ).unsqueeze(0)
 
     # Apply the rotation
     rotated_2d = kornia.geometry.transform.warp_perspective(
-        checkerboard.unsqueeze(0), rotation_matrix, (height, width), padding_mode="reflection"
+        checkerboard.unsqueeze(0),
+        rotation_matrix,
+        (height, width),
+        padding_mode="reflection",
     )
 
     # Anti-alias and pad the image
@@ -396,14 +393,13 @@ def random_high_freq(latents):
             # Assign the rotated checkerboard to the output tensor
             output[i, j] = resized_checkerboard.squeeze()
 
-    print(output.shape)
     return output
 
 
 DISCOUNT_HIGH = 0.08
-DISCOUNT_LOW = 0.08
+DISCOUNT_LOW = 0.01
 
-LOW_FLIP = 0.05
+LOW_FLIP = 0.2
 HIGH_FLIP = 0.05
 
 
@@ -430,7 +426,11 @@ def hi_lo_noise(latents):
 
 def gamma_pink_noise(latents):
     device = latents.device
-    g2 = torch.clamp(random_gamma((latents.shape[0], latents.shape[1], 1, 1), alpha=0.5, beta=10), 0, 1).to(device)
+    g2 = torch.clamp(
+        random_gamma((latents.shape[0], latents.shape[1], 1, 1), alpha=0.5, beta=10),
+        0,
+        1,
+    ).to(device)
 
     # g1 is the random freq
     # g2 is the proportion to shift the noise
@@ -441,7 +441,7 @@ def gamma_pink_noise(latents):
 def pyramid_noise_like(x, discount=0.9):
 
     b, c, w, h = x.shape
-    u = nn.Upsample(size=(w, h), mode="bilinear")
+    u = torch.nn.Upsample(size=(w, h), mode="bilinear")
     noise = torch.randn_like(x)
 
     for i in range(10):
@@ -454,7 +454,9 @@ def pyramid_noise_like(x, discount=0.9):
     return noise / noise.std()  # Scaled back to roughly unit variance
 
 
-def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: str, revision: str):
+def import_model_class_from_model_name_or_path(
+    pretrained_model_name_or_path: str, revision: str
+):
     text_encoder_config = PretrainedConfig.from_pretrained(
         pretrained_model_name_or_path,
         subfolder="text_encoder",
@@ -467,7 +469,9 @@ def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: st
 
         return CLIPTextModel
     elif model_class == "RobertaSeriesModelWithTransformation":
-        from diffusers.pipelines.alt_diffusion.modeling_roberta_series import RobertaSeriesModelWithTransformation
+        from diffusers.pipelines.alt_diffusion.modeling_roberta_series import (
+            RobertaSeriesModelWithTransformation,
+        )
 
         return RobertaSeriesModelWithTransformation
     else:
@@ -532,7 +536,12 @@ def parse_args(input_args=None):
         action="store_true",
         help="Flag to add prior preservation loss.",
     )
-    parser.add_argument("--prior_loss_weight", type=float, default=1.0, help="The weight of prior preservation loss.")
+    parser.add_argument(
+        "--prior_loss_weight",
+        type=float,
+        default=1.0,
+        help="The weight of prior preservation loss.",
+    )
     parser.add_argument(
         "--num_class_images",
         type=int,
@@ -548,24 +557,8 @@ def parse_args(input_args=None):
         default="text-inversion-model",
         help="The output directory where the model predictions and checkpoints will be written.",
     )
-    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
     parser.add_argument(
-        "--resolution",
-        type=int,
-        default=512,
-        help=(
-            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
-            " resolution"
-        ),
-    )
-    parser.add_argument(
-        "--center_crop",
-        default=False,
-        action="store_true",
-        help=(
-            "Whether to center crop the input images to the resolution. If not set, the images will be randomly"
-            " cropped. The images will be resized to the resolution first before cropping."
-        ),
+        "--seed", type=int, default=None, help="A seed for reproducible training."
     )
     parser.add_argument(
         "--train_text_encoder",
@@ -583,10 +576,16 @@ def parse_args(input_args=None):
         help="Uses the filename.txt file's content as the image labels instead of the instance_prompt, useful for regularization when training for styles with wide image variance",
     )
     parser.add_argument(
-        "--train_batch_size", type=int, default=4, help="Batch size (per device) for the training dataloader."
+        "--train_batch_size",
+        type=int,
+        default=4,
+        help="Batch size (per device) for the training dataloader.",
     )
     parser.add_argument(
-        "--sample_batch_size", type=int, default=4, help="Batch size (per device) for sampling images."
+        "--sample_batch_size",
+        type=int,
+        default=4,
+        help="Batch size (per device) for sampling images.",
     )
     parser.add_argument("--num_train_epochs", type=int, default=1)
     parser.add_argument(
@@ -595,7 +594,8 @@ def parse_args(input_args=None):
         default=None,
         help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
     )
-    parser.add_argument("--super_image_ratio", type=float, default=0.3),
+    parser.add_argument("--super_image_batch_size", type=int, default=4),
+    parser.add_argument("--inner_batch_size", type=int, default=4),
     parser.add_argument("--super_image_dir", type=str, default=None),
     parser.add_argument(
         "--checkpointing_steps",
@@ -645,15 +645,24 @@ def parse_args(input_args=None):
         default=5e-6,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
-    parser.add_argument("--step_size_up", type=float, default=1000, help="step size up for cyclical LR")
-    parser.add_argument("--step_size_down", type=float, default=1000, help="step size down for cyclical LR")
+    parser.add_argument(
+        "--step_size_up", type=float, default=1000, help="step size up for cyclical LR"
+    )
+    parser.add_argument(
+        "--step_size_down",
+        type=float,
+        default=1000,
+        help="step size down for cyclical LR",
+    )
     parser.add_argument(
         "--scale_lr",
         action="store_true",
         default=False,
         help="Scale the learning rate by the number of GPUs, gradient accumulation steps, and batch size.",
     )
-    parser.add_argument("--lr_end", type=float, default=1e-9, help="end rate of polynomial lr")
+    parser.add_argument(
+        "--lr_end", type=float, default=1e-9, help="end rate of polynomial lr"
+    )
     parser.add_argument(
         "--lr_scheduler",
         type=str,
@@ -664,7 +673,10 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
-        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
+        "--lr_warmup_steps",
+        type=int,
+        default=500,
+        help="Number of steps for the warmup in the lr scheduler.",
     )
     parser.add_argument(
         "--lr_num_cycles",
@@ -672,11 +684,23 @@ def parse_args(input_args=None):
         default=1,
         help="Number of hard resets of the lr in cosine_with_restarts scheduler.",
     )
-    parser.add_argument("--lr_power", type=float, default=1.0, help="Power factor of the polynomial scheduler.")
     parser.add_argument(
-        "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
+        "--lr_power",
+        type=float,
+        default=1.0,
+        help="Power factor of the polynomial scheduler.",
     )
-    parser.add_argument("--stop_text", type=int, default=999999999, help="Stop training the text encoder")
+    parser.add_argument(
+        "--use_8bit_adam",
+        action="store_true",
+        help="Whether or not to use 8-bit Adam from bitsandbytes.",
+    )
+    parser.add_argument(
+        "--stop_text",
+        type=int,
+        default=999999999,
+        help="Stop training the text encoder",
+    )
     parser.add_argument(
         "--dataloader_num_workers",
         type=int,
@@ -685,13 +709,41 @@ def parse_args(input_args=None):
             "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
         ),
     )
-    parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
-    parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
-    parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
-    parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
-    parser.add_argument("--hub_token", type=str, default=None, help="The token to use to push to the Model Hub.")
+    parser.add_argument(
+        "--adam_beta1",
+        type=float,
+        default=0.9,
+        help="The beta1 parameter for the Adam optimizer.",
+    )
+    parser.add_argument(
+        "--adam_beta2",
+        type=float,
+        default=0.999,
+        help="The beta2 parameter for the Adam optimizer.",
+    )
+    parser.add_argument(
+        "--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use."
+    )
+    parser.add_argument(
+        "--adam_epsilon",
+        type=float,
+        default=1e-08,
+        help="Epsilon value for the Adam optimizer",
+    )
+    parser.add_argument(
+        "--max_grad_norm", default=1.0, type=float, help="Max gradient norm."
+    )
+    parser.add_argument(
+        "--push_to_hub",
+        action="store_true",
+        help="Whether or not to push the model to the Hub.",
+    )
+    parser.add_argument(
+        "--hub_token",
+        type=str,
+        default=None,
+        help="The token to use to push to the Model Hub.",
+    )
     parser.add_argument(
         "--hub_model_id",
         type=str,
@@ -745,17 +797,45 @@ def parse_args(input_args=None):
             " 1.10.and an Nvidia Ampere GPU.  Default to  fp16 if a GPU is available else fp32."
         ),
     )
-    parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument(
-        "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
+        "--local_rank",
+        type=int,
+        default=-1,
+        help="For distributed training: local_rank",
     )
-    parser.add_argument("--enable_xformers_vae", action="store_true", help="add xformers on vae")
     parser.add_argument(
-        "--flash_attention", action="store_true", help="set memory_effecient_attention to flash attention"
+        "--enable_xformers_memory_efficient_attention",
+        action="store_true",
+        help="Whether or not to use xformers.",
     )
-    parser.add_argument("--channels_last", action="store_true", help="Whether or not to use channels last.")
-    parser.add_argument("--enable_vae_tiling", action="store_true", help="Whether or not to use vae tiling.")
-    parser.add_argument("--enable_attention_slicing", action="store_true", help="Enable Attention Slicing")
+    parser.add_argument(
+        "--enable_xformers_vae", action="store_true", help="add xformers on vae"
+    )
+    parser.add_argument(
+        "--flash_attention",
+        action="store_true",
+        help="set memory_effecient_attention to flash attention",
+    )
+    parser.add_argument(
+        "--channels_last",
+        action="store_true",
+        help="Whether or not to use channels last.",
+    )
+    parser.add_argument(
+        "--enable_vae_tiling",
+        action="store_true",
+        help="Whether or not to use vae tiling.",
+    )
+    parser.add_argument(
+        "--enable_attention_slicing",
+        action="store_true",
+        help="Enable Attention Slicing",
+    )
+    parser.add_argument(
+        "--cpu_model_offload",
+        action="store_true",
+        help="Enable cpu model offload",
+    )
     parser.add_argument(
         "--set_grads_to_none",
         action="store_true",
@@ -768,7 +848,7 @@ def parse_args(input_args=None):
     parser.add_argument("--save_model_every_n_steps", type=int)
     parser.add_argument("--sample_model_every_n_steps", type=int)
     parser.add_argument("--pink_noise", type=bool, default=False)
-    parser.add_argument("--gamma_offset_noise", type=bool, default=False)
+    parser.add_argument("--gamma_offset_noise", type=float, default=1.0)
     parser.add_argument("--pyramid_noise", type=bool, default=False)
     parser.add_argument("--offset_noise", type=bool, default=False)
     parser.add_argument("--hi_lo_noise", type=bool, default=False)
@@ -791,9 +871,13 @@ def parse_args(input_args=None):
     else:
         # logger is not available yet
         if args.class_data_dir is not None:
-            warnings.warn("You need not use --class_data_dir without --with_prior_preservation.")
+            warnings.warn(
+                "You need not use --class_data_dir without --with_prior_preservation."
+            )
         if args.class_prompt is not None:
-            warnings.warn("You need not use --class_prompt without --with_prior_preservation.")
+            warnings.warn(
+                "You need not use --class_prompt without --with_prior_preservation."
+            )
 
     return args
 
@@ -817,8 +901,11 @@ def all_images(image_dir):
     return (
         list(image_path.glob("*.jpg"))
         + list(image_path.glob("*.png"))
+        + list(image_path.glob("*.PNG"))
         + list(image_path.glob("*.webp"))
         + list(image_path.glob("*.jpeg"))
+        + list(image_path.glob("*.JPG"))
+        + list(image_path.glob("*.JPEG"))
     )
 
 
@@ -834,129 +921,132 @@ class DreamBoothDataset(Dataset):
         instance_prompt,
         tokenizer,
         super=None,
-        class_prompt=None,
         size=512,
-        center_crop=False,
         use_filename_as_label=False,
         use_txt_as_label=False,
-        class_data_root=None,
+        inner_batch_size=None,
         super_image_dir=None,
+        super_image_batch_size=4,
     ):
+        # TODO: Read this carefully and refacto and improve
         self.size = size
-        self.center_crop = center_crop
         self.tokenizer = tokenizer
+        self.inner_batch_size = inner_batch_size
 
         self.instance_data_root = Path(instance_data_root)
         if not self.instance_data_root.exists():
-            raise ValueError(f"Instance {self.instance_data_root} images root doesn't exists.")
+            raise ValueError(
+                f"Instance {self.instance_data_root} images root doesn't exists."
+            )
 
-        if class_data_root:
-            self.class_data_root = Path(class_data_root)
-        else:
-            self.class_data_root = None
-
-        self.instance_images_path = all_images(self.instance_data_root)
-        self.num_instance_images = len(self.instance_images_path)
+        all_files = [f for f in self.instance_data_root.glob('**/*')]
+        self.num_instance_images = len(all_files)
         self.instance_prompt = instance_prompt
+
         self.use_filename_as_label = use_filename_as_label
         self.use_txt_as_label = use_txt_as_label
         self._length = self.num_instance_images
 
         self.super_image_dir = super_image_dir
+        self.super_image_batch_size = super_image_batch_size
+
         if self.super_image_dir:
-            self.instance_data_root = Path(super_image_dir)
+            self.super_image_dir = Path(super_image_dir)
 
-            self.super_images_paths = all_images(super_image_dir)
-            self.num_super_images = len(self.super_images_paths)
+        self.aspect_ratio_dirs = sorted(list(self.instance_data_root.iterdir()))
+        self.folder_weights = [
+            len(list(ar_dir.iterdir())) / sum(len(list(ar.iterdir())) for ar in self.aspect_ratio_dirs)
+            for ar_dir in self.aspect_ratio_dirs
+        ]
 
-        self.image_transforms = transforms.Compose(
-            [
-                transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR),
-                transforms.CenterCrop(size) if center_crop else transforms.RandomCrop(size),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
 
-        self.image_transforms = transforms.Compose(
-            [
-                transforms.Resize(size, interpolation=transforms.InterpolationMode.BILINEAR),
-                transforms.CenterCrop(size) if center_crop else transforms.RandomCrop(size),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
-            ]
-        )
 
     def __len__(self):
         return self._length
 
     def __getitem__(self, index):
         example = {}
-        path = self.instance_images_path[index % self.num_instance_images]
-        prompt = get_filename(path) if self.use_filename_as_label else self.instance_prompt
-        prompt = get_label_from_txt(path) if self.use_txt_as_label else prompt
+        aspect_ratio_index = random.choices(range(len(self.aspect_ratio_dirs)), weights=self.folder_weights)[0]
+        aspect_ratio_dir = self.aspect_ratio_dirs[aspect_ratio_index]
+        aspect_ratio_dir_name = Path(aspect_ratio_dir).name
+        image_files = list((self.instance_data_root / aspect_ratio_dir_name).iterdir())
+        superimage_files = list((self.super_image_dir / aspect_ratio_dir_name).iterdir())
 
-        real_path = os.path.abspath(path)
+        width, height = map(int, aspect_ratio_dir.name.split("x"))
+        batch_size_adjust = (512 * 512) / (width * height)
 
-        instance_image = Image.open(real_path)
-        if not instance_image.mode == "RGB":
-            instance_image = instance_image.convert("RGB")
-        example["instance_images"] = self.image_transforms(instance_image)
-        example["instance_prompt_ids"] = self.tokenizer(
-            prompt,
-            truncation=True,
-            padding="max_length",
-            max_length=self.tokenizer.model_max_length,
-            return_tensors="pt",
-        ).input_ids
+        image_filepaths = random.sample(image_files, int(self.inner_batch_size * batch_size_adjust))
+        superimage_filepaths = random.sample(superimage_files, int(self.super_image_batch_size * batch_size_adjust))
 
-        if self.super_image_dir:
-            path = self.super_images_paths[index % self.num_super_images]
-            super_image = Image.open(path)
+        size = (width, height)
 
-            super_prompt = get_filename(path) if self.use_filename_as_label else self.instance_prompt
-            super_prompt = get_label_from_txt(path) if self.use_txt_as_label else super_prompt
+        self.image_transforms = transforms.Compose(
+            [
+                transforms.Resize(
+                    size, interpolation=transforms.InterpolationMode.BILINEAR
+                ),
+                transforms.CenterCrop(size),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
 
-            if not super_image.mode == "RGB":
-                super_image = super_image.convert("RGB")
 
-            example["super_images"] = self.image_transforms(super_image)
-            example["super_image_prompt_ids"] = self.tokenizer(
-                super_prompt,
-                truncation=True,
-                padding="max_length",
-                max_length=self.tokenizer.model_max_length,
-                return_tensors="pt",
-            ).input_ids
+        images = []
+        prompt_ids = []
 
-        if self.class_data_root:
-            class_image = Image.open(self.class_images_path[index % self.num_class_images])
-            if not class_image.mode == "RGB":
-                class_image = class_image.convert("RGB")
-            example["class_images"] = self.image_transforms(class_image)
-            example["class_prompt_ids"] = self.tokenizer(
-                self.class_prompt,
-                truncation=True,
-                padding="max_length",
-                max_length=self.tokenizer.model_max_length,
-                return_tensors="pt",
-            ).input_ids
+        for path in image_filepaths + superimage_filepaths:
+            abs_path = os.path.abspath(path)
+            real_path = os.path.realpath(path)
+
+            prompt = (
+                get_filename(path) if self.use_filename_as_label else self.instance_prompt
+            )
+            prompt = get_label_from_txt(path) if self.use_txt_as_label else prompt
+
+
+            def minimal_aspect_ratio(path):
+                filename = Path(path).name
+                width, height = map(int, filename.split('x'))
+                fraction = Fraction(width, height)
+                return f"{fraction.numerator}:{fraction.denominator}"
+
+            aspect = minimal_aspect_ratio(aspect_ratio_dir)
+            prompt = prompt + f"; AR: {aspect}"
+
+            if os.path.exists(abs_path):
+                try:
+                    instance_image = Image.open(abs_path)
+                    if not instance_image.mode == "RGB":
+                        instance_image = instance_image.convert("RGB")
+
+                    images.append(self.image_transforms(instance_image))
+                    prompt_ids.append(self.tokenizer(
+                        prompt,
+                        truncation=True,
+                        padding="max_length",
+                        max_length=self.tokenizer.model_max_length,
+                        return_tensors="pt",
+                    ).input_ids)
+                except Exception as e:
+                    print(f"Error loading image {abs_path}: {e}")
+            else:
+                print(f"File not found: {abs_path}")
+
+
+        example["images"] = images
+        example["prompt_ids"] = prompt_ids
 
         return example
 
 
-def collate_fn(examples, with_prior_preservation=False):
-    input_ids = [example["instance_prompt_ids"] for example in examples]
-    pixel_values = [example["instance_images"] for example in examples]
+def collate_fn(examples):
+    input_ids = [example["prompt_ids"] for example in examples]
+    pixel_values = [example["images"] for example in examples]
 
-    input_ids += [example["super_image_prompt_ids"] for example in examples]
-    pixel_values += [example["super_images"] for example in examples]
-
-    # Concat class and instance examples for prior preservation.
-    # We do this to avoid doing two forward passes.
-    if with_prior_preservation:
-        input_ids += [example["class_prompt_ids"] for example in examples]
-        pixel_values += [example["class_images"] for example in examples]
+    import itertools
+    input_ids = list(itertools.chain(*input_ids))
+    pixel_values = list(itertools.chain(*pixel_values))
 
     pixel_values = torch.stack(pixel_values)
     pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
@@ -967,6 +1057,7 @@ def collate_fn(examples, with_prior_preservation=False):
         "input_ids": input_ids,
         "pixel_values": pixel_values,
     }
+
     return batch
 
 
@@ -987,7 +1078,9 @@ class PromptDataset(Dataset):
         return example
 
 
-def get_full_repo_name(model_id: str, organization: Optional[str] = None, token: Optional[str] = None):
+def get_full_repo_name(
+    model_id: str, organization: Optional[str] = None, token: Optional[str] = None
+):
     if token is None:
         token = HfFolder.get_token()
     if organization is None:
@@ -997,7 +1090,14 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
         return f"{organization}/{model_id}"
 
 
+# keep track of saved steps and skip if already done
+saved_steps = {}
 def save_model(accelerator, unet, text_encoder, args, step=None):
+    if saved_steps.get(step):
+        return
+    else:
+        saved_steps[step] = True
+
     unet = accelerator.unwrap_model(unet)
     text_encoder = accelerator.unwrap_model(text_encoder)
 
@@ -1020,13 +1120,26 @@ def save_model(accelerator, unet, text_encoder, args, step=None):
         pipeline.save_pretrained(folder)
 
         if args.push_to_hub:
-            repo.push_to_hub(commit_message="End of training", blocking=False, auto_lfs_prune=True)
+            repo.push_to_hub(
+                commit_message="End of training", blocking=False, auto_lfs_prune=True
+            )
 
+
+import wandb
 
 PHOTO_COUNT = 2
 
+test_inference_steps = 32
+
+# record to not repeat
+sampled_steps = {}
 
 def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
+    if sampled_steps.get(step):
+        return
+    else:
+        sampled_steps[step] = True
+
     torch_dtype = torch.float16 if accelerator.device.type == "cuda" else torch.float32
     if args.mixed_precision == "fp32":
         torch_dtype = torch.float32
@@ -1042,10 +1155,18 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
         vae=vae,
         torch_dtype=torch_dtype,
     )
+
+    schedulers = [
+        ("dpm-multi", DPMSolverMultistepScheduler.from_config(pipeline.scheduler.config), 28, 6),
+        ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config), 35, 4),
+    ]
+
+
     pipeline.to(accelerator.device)
 
     for prompt in prompts_with_size:
-        for guidance_scale in [14]:
+        for (schedule_name, scheduler, steps, gscale) in schedulers:
+            pipeline.scheduler = scheduler
             with torch.autocast(device_type="cuda", dtype=vae.dtype):
                 # Reset Seed
                 seed = 123123
@@ -1064,59 +1185,42 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                 height = round_to_nearest_multiple(height, 8)
 
                 if not (negative_prompt is None):
-                    negative_prompt = [negative_prompt]
-
-                # Function for organization
-
-                def get_prompt_embeds(instruct):
-                    # TODO: add all tests for each type including mix
-
-                    instruct_prompt = instructions_detailed[instruct]["prompt"]
-
-                    # preprocess the prompt
-                    instruct_prompt = clip_processor(text=instruct_prompt, return_tensors="pt")
-                    instruct_prompt_hidden_states = instructtext_encoder(prompt)[0]
-
-                    if instruct == "txt2img":
-                        text_ids = clip_processor(text=text, return_tensors="pt")
-                        text_hidden_states = text_encoder(text_ids)[0]
-
-                        zeros = torch.zeros_like(instruct_prompt_hidden_states)
-                        # stack the hidden states with padding zeros
-                        instruct_hidden_states = torch.cat(
-                            [
-                                instruct_prompt_hidden_states,
-                                text_hidden_states,
-                                zeros,
-                                zeros,
-                                zeros,
-                            ],
-                            dim=1,
-                        )
-                        return instuct_hidden_states
-
-                prompt_emebds = get_prompt_embeds("txt2img")
+                    negative_prompt = [negative_prompt] * PHOTO_COUNT
 
                 images = pipeline(
-                    prompt_embeds=prompt_embeds,
-                    num_images_per_prompt=PHOTO_COUNT,
+                    [text] * PHOTO_COUNT,
                     negative_prompt=negative_prompt,
-                    num_inference_steps=50,
-                    guidance_scale=guidance_scale,
+                    num_inference_steps=steps,
+                    guidance_scale=gscale,
                     width=width,
                     height=height,
                 ).images
-                caption = "scale: " + str(guidance_scale)
-                label_negative = "None" if negative_prompt is None else str(negative_prompt[0:20])
 
-                label = caption + ", " + text[0:160] + "neg: " + label_negative
-                wandb.log({label: [wandb.Image(image, caption=label) for image in images]}, step=step)
+                label_negative = (
+                    "None" if negative_prompt is None else str(negative_prompt[0:20])
+                )
 
+                # Limit the length of text, label_negative, and guidance_scale
+                label_text = text[0:100]
+                label_negative = label_negative[0:30]
+                label_guidance_scale = str(gscale)
+
+                label = f"{label_text} | neg: {label_negative} | scale: {label_guidance_scale} | steps: {steps} | sch: {schedule_name}"
+
+                wandb.log(
+                    {label: [wandb.Image(image, caption=label) for image in images]},
+                    step=step,
+                )
+
+from pathlib import Path
+from fractions import Fraction
 
 def main(args):
     logging_dir = Path(args.logging_dir)
 
-    accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
+    accelerator_project_config = ProjectConfiguration(
+        total_limit=args.checkpoints_total_limit
+    )
 
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -1129,7 +1233,11 @@ def main(args):
     # Currently, it's not possible to do gradient accumulation when training two models with accelerate.accumulate
     # This will be enabled soon in accelerate. For now, we don't allow gradient accumulation when training two models.
     # TODO (patil-suraj): Remove this check when gradient accumulation with two models is enabled in accelerate.
-    if args.train_text_encoder and args.gradient_accumulation_steps > 1 and accelerator.num_processes > 1:
+    if (
+        args.train_text_encoder
+        and args.gradient_accumulation_steps > 1
+        and accelerator.num_processes > 1
+    ):
         raise ValueError(
             "Gradient accumulation is not supported when training the text encoder in distributed training. "
             "Please set gradient_accumulation_steps to 1. This feature will be supported in the future."
@@ -1161,7 +1269,9 @@ def main(args):
         cur_class_images = len(list(class_images_dir.iterdir()))
 
         if cur_class_images < args.num_class_images:
-            torch_dtype = torch.float16 if accelerator.device.type == "cuda" else torch.float32
+            torch_dtype = (
+                torch.float16 if accelerator.device.type == "cuda" else torch.float32
+            )
             if args.prior_generation_precision == "fp32":
                 torch_dtype = torch.float32
             elif args.prior_generation_precision == "fp16":
@@ -1180,19 +1290,26 @@ def main(args):
             logger.info(f"Number of class images to sample: {num_new_images}.")
 
             sample_dataset = PromptDataset(args.class_prompt, num_new_images)
-            sample_dataloader = torch.utils.data.DataLoader(sample_dataset, batch_size=args.sample_batch_size)
+            sample_dataloader = torch.utils.data.DataLoader(
+                sample_dataset, batch_size=args.sample_batch_size
+            )
 
             sample_dataloader = accelerator.prepare(sample_dataloader)
             pipeline.to(accelerator.device)
 
             for example in tqdm(
-                sample_dataloader, desc="Generating class images", disable=not accelerator.is_local_main_process
+                sample_dataloader,
+                desc="Generating class images",
+                disable=not accelerator.is_local_main_process,
             ):
                 images = pipeline(example["prompt"]).images
 
                 for i, image in enumerate(images):
                     hash_image = hashlib.sha1(image.tobytes()).hexdigest()
-                    image_filename = class_images_dir / f"{example['index'][i] + cur_class_images}-{hash_image}.jpg"
+                    image_filename = (
+                        class_images_dir
+                        / f"{example['index'][i] + cur_class_images}-{hash_image}.jpg"
+                    )
                     image.save(image_filename)
 
             del pipeline
@@ -1203,11 +1320,15 @@ def main(args):
     if accelerator.is_main_process:
         if args.push_to_hub:
             if args.hub_model_id is None:
-                repo_name = get_full_repo_name(Path(args.output_dir).name, token=args.hub_token)
+                repo_name = get_full_repo_name(
+                    Path(args.output_dir).name, token=args.hub_token
+                )
             else:
                 repo_name = args.hub_model_id
             create_repo(repo_name, exist_ok=True, token=args.hub_token)
-            repo = Repository(args.output_dir, clone_from=repo_name, token=args.hub_token)
+            repo = Repository(
+                args.output_dir, clone_from=repo_name, token=args.hub_token
+            )
 
             with open(os.path.join(args.output_dir, ".gitignore"), "w+") as gitignore:
                 if "step_*" not in gitignore:
@@ -1219,7 +1340,9 @@ def main(args):
 
     # Load the tokenizer
     if args.tokenizer_name:
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_name, revision=args.revision, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(
+            args.tokenizer_name, revision=args.revision, use_fast=False
+        )
     elif args.pretrained_model_name_or_path:
         tokenizer = AutoTokenizer.from_pretrained(
             args.pretrained_model_name_or_path,
@@ -1229,14 +1352,22 @@ def main(args):
         )
 
         # import correct text encoder class
-    text_encoder_cls = import_model_class_from_model_name_or_path(args.pretrained_model_name_or_path, args.revision)
+    text_encoder_cls = import_model_class_from_model_name_or_path(
+        args.pretrained_model_name_or_path, args.revision
+    )
 
     # Load scheduler and models
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
-    text_encoder = text_encoder_cls.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
+    noise_scheduler = DDPMScheduler.from_pretrained(
+        args.pretrained_model_name_or_path, subfolder="scheduler"
     )
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision)
+    text_encoder = text_encoder_cls.from_pretrained(
+        args.pretrained_model_name_or_path,
+        subfolder="text_encoder",
+        revision=args.revision,
+    )
+    vae = AutoencoderKL.from_pretrained(
+        args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision
+    )
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
     )
@@ -1259,11 +1390,15 @@ def main(args):
 
                 if type(model) == type(text_encoder):
                     # load transformers style into model
-                    load_model = text_encoder_cls.from_pretrained(input_dir, subfolder="text_encoder")
+                    load_model = text_encoder_cls.from_pretrained(
+                        input_dir, subfolder="text_encoder"
+                    )
                     model.config = load_model.config
                 else:
                     # load diffusers style into model
-                    load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
+                    load_model = UNet2DConditionModel.from_pretrained(
+                        input_dir, subfolder="unet"
+                    )
                     model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
@@ -1279,11 +1414,16 @@ def main(args):
     if args.enable_vae_tiling:
         vae.enable_tiling()
 
-    # if args.enable_attention_slicing:
-    #    unet.set_attention_slice(slice_size)
+    if args.enable_attention_slicing:
+        unet.set_attention_slice(slice_size)
+
+    if args.cpu_model_offload:
+        for model in [self.unet, self.text_encoder, self.vae]:
+            model.enable_model_cpu_offload()
 
     if args.channels_last:
         unet.to(memory_format=torch.channels_last)
+
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -1302,10 +1442,13 @@ def main(args):
             else:
                 unet.enable_xformers_memory_efficient_attention()
 
+
             if args.enable_xformers_vae:
                 vae.enable_xformers_memory_efficient_attention(attention_op=None)
         else:
-            raise ValueError("xformers is not available. Make sure it is installed correctly")
+            raise ValueError(
+                "xformers is not available. Make sure it is installed correctly"
+            )
 
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
@@ -1323,7 +1466,10 @@ def main(args):
             f"Unet loaded as datatype {accelerator.unwrap_model(unet).dtype}. {low_precision_error_string}"
         )
 
-        if args.train_text_encoder and accelerator.unwrap_model(text_encoder).dtype != torch.float32:
+        if (
+            args.train_text_encoder
+            and accelerator.unwrap_model(text_encoder).dtype != torch.float32
+        ):
             raise ValueError(
                 f"Text encoder loaded as datatype {accelerator.unwrap_model(text_encoder).dtype}."
                 f" {low_precision_error_string}"
@@ -1336,7 +1482,10 @@ def main(args):
 
     if args.scale_lr:
         args.learning_rate = (
-            args.learning_rate * args.gradient_accumulation_steps * args.train_batch_size * accelerator.num_processes
+            args.learning_rate
+            * args.gradient_accumulation_steps
+            * args.train_batch_size
+            * accelerator.num_processes
         )
 
         # Use 8-bit Adam for lower memory usage or to fine-tune the model in 16GB GPUs
@@ -1354,7 +1503,9 @@ def main(args):
 
     # Optimizer creation
     params_to_optimize = (
-        itertools.chain(unet.parameters(), text_encoder.parameters()) if args.train_text_encoder else unet.parameters()
+        itertools.chain(unet.parameters(), text_encoder.parameters())
+        if args.train_text_encoder
+        else unet.parameters()
     )
     optimizer = optimizer_class(
         params_to_optimize,
@@ -1364,32 +1515,34 @@ def main(args):
         eps=args.adam_epsilon,
     )
 
-    noise_scheduler = DDPMScheduler.from_config(args.pretrained_model_name_or_path, subfolder="scheduler")
+    noise_scheduler = DDPMScheduler.from_config(
+        args.pretrained_model_name_or_path, subfolder="scheduler"
+    )
 
     train_dataset = DreamBoothDataset(
         instance_data_root=args.instance_data_dir,
         instance_prompt=args.instance_prompt,
-        class_data_root=args.class_data_dir if args.with_prior_preservation else None,
-        class_prompt=args.class_prompt,
         tokenizer=tokenizer,
-        size=args.resolution,
-        center_crop=args.center_crop,
         use_filename_as_label=args.use_filename_as_label,
         use_txt_as_label=args.use_txt_as_label,
         super_image_dir=args.super_image_dir,
+        super_image_batch_size=args.super_image_batch_size,
+        inner_batch_size=args.inner_batch_size,
     )
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.train_batch_size,
         shuffle=True,
-        collate_fn=lambda examples: collate_fn(examples, args.with_prior_preservation),
+        collate_fn=collate_fn,
         num_workers=args.dataloader_num_workers,
     )
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    num_update_steps_per_epoch = math.ceil(
+        len(train_dataloader) / args.gradient_accumulation_steps
+    )
     if args.max_train_steps is None:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
@@ -1398,10 +1551,15 @@ def main(args):
 
     if args.lr_scheduler == "polynomial":
         lr_scheduler = get_polynomial_decay_schedule_with_warmup(
-            optimizer, args.lr_warmup_steps, total_steps, lr_end=args.lr_end, power=args.lr_power, last_epoch=-1
+            optimizer,
+            args.lr_warmup_steps,
+            total_steps,
+            lr_end=args.lr_end,
+            power=args.lr_power,
+            last_epoch=-1,
         )
     elif args.lr_scheduler == "cyclical":
-        def clr_fn(x): return 1 / (5 ** (x * 0.0001))
+        clr_fn = lambda x: 1 / (5 ** (x * 0.0001))
         lr_scheduler = torch.optim.lr_scheduler.CyclicLR(
             optimizer,
             base_lr=args.lr_end,
@@ -1409,6 +1567,26 @@ def main(args):
             step_size_up=args.step_size_up,
             step_size_down=args.step_size_down,
             scale_mode="iterations",
+        )
+    elif args.lr_scheduler == "logarithmic":
+        class LogarithmicLR(torch.optim.lr_scheduler._LRScheduler):
+            def __init__(self, optimizer, base_lr, max_lr, num_iterations, last_epoch=-1, verbose=False):
+                self.base_lr = base_lr
+                self.max_lr = max_lr
+                self.num_iterations = num_iterations
+                super(LogarithmicLR, self).__init__(optimizer, last_epoch, verbose)
+
+            def get_lr(self):
+                step_ratio = self.last_epoch / self.num_iterations
+                lr_diff = self.max_lr - self.base_lr
+                new_lr = self.base_lr + (lr_diff * np.log10(1 + 9 * step_ratio))
+                return [new_lr for _ in self.base_lrs]
+
+        lr_scheduler = LogarithmicLR(
+            optimizer,
+            base_lr=args.lr_end,
+            max_lr=args.learning_rate,
+            num_iterations=args.total_iterations,
         )
     else:
         lr_scheduler = get_scheduler(
@@ -1422,7 +1600,13 @@ def main(args):
 
         # Prepare everything with our `accelerator`.
     if args.train_text_encoder:
-        unet, text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        (
+            unet,
+            text_encoder,
+            optimizer,
+            train_dataloader,
+            lr_scheduler,
+        ) = accelerator.prepare(
             unet, text_encoder, optimizer, train_dataloader, lr_scheduler
         )
     else:
@@ -1444,7 +1628,9 @@ def main(args):
         text_encoder.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    num_update_steps_per_epoch = math.ceil(
+        len(train_dataloader) / args.gradient_accumulation_steps
+    )
     if overrode_max_train_steps:
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
     # Afterwards we recalculate our number of training epochs
@@ -1456,14 +1642,20 @@ def main(args):
         accelerator.init_trackers("dreambooth", config=vars(args))
 
     # Train!
-    total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+    total_batch_size = (
+        args.train_batch_size
+        * accelerator.num_processes
+        * args.gradient_accumulation_steps
+    )
 
     logger.info("***** Running training *****")
     logger.info(f"  Num examples = {len(train_dataset)}")
     logger.info(f"  Num batches each epoch = {len(train_dataloader)}")
     logger.info(f"  Num Epochs = {args.num_train_epochs}")
     logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
-    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(
+        f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}"
+    )
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     global_step = 0
@@ -1492,10 +1684,15 @@ def main(args):
 
             resume_global_step = global_step * args.gradient_accumulation_steps
             first_epoch = global_step // num_update_steps_per_epoch
-            resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
+            resume_step = resume_global_step % (
+                num_update_steps_per_epoch * args.gradient_accumulation_steps
+            )
 
     # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
+    progress_bar = tqdm(
+        range(global_step, args.max_train_steps),
+        disable=not accelerator.is_local_main_process,
+    )
     progress_bar.set_description("Steps")
 
     # only swap to eval once for performance
@@ -1506,20 +1703,26 @@ def main(args):
             text_encoder.train()
 
         for step, batch in enumerate(train_dataloader):
-            if step > args.stop_text and args.text_off is False:
+            if step > args.stop_text and text_off is False:
                 text_encoder.requires_grad_(False)
                 text_encoder.eval()
                 text_off = True
 
             # Skip steps until we reach the resumed step
-            if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
+            if (
+                args.resume_from_checkpoint
+                and epoch == first_epoch
+                and step < resume_step
+            ):
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
                 continue
 
             with accelerator.accumulate(unet):
                 # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
+                latents = vae.encode(
+                    batch["pixel_values"].to(dtype=weight_dtype)
+                ).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
@@ -1532,195 +1735,32 @@ def main(args):
                 elif args.hi_lo_noise:
                     noise = hi_lo_noise(latents)
                 elif args.gamma_offset_noise:
-                    noise = gamma_offset_noise(latents)
+                    noise = gamma_offset_noise(latents, discount=args.gamma_offset_noise)
                 elif args.pyramid_noise:
                     noise = pyramid_noise_like(latents, discount=0.8)
                 else:
                     noise = torch.randn_like(latents)
-
-                # aux_image_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
-                # aux_text_index = faiss.IndexFlatL2(clip_model.config.projection_dim)
-
-                # item
-
                 bsz = latents.shape[0]
                 # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+                timesteps = torch.randint(
+                    0,
+                    noise_scheduler.config.num_train_timesteps,
+                    (bsz,),
+                    device=latents.device,
+                )
                 timesteps = timesteps.long()
 
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # Get a set of five embeddings
-                # if the result has less than five, pad with zeros
-                def get_instruct_hidden_states(batch):
-                    pixel_values = batch["pixel_values"]
-                    all_states = []
-                    for i, pixels in enumerate(pixel_values):
-                        # slice only the ith element
-                        input_ids = batch["input_ids"][i].unsqueeze(0)
-                        instruct = get_random_instruct()
-
-                        # debug
-                        print(instructions_detailed, instruct)
-                        prompt = instructions_detailed[instruct]["prompt"]
-                        print("prompt")
-                        print(prompt)
-                        # preprocess the prompt
-                        prompt = clip_processor(text=[prompt], return_tensors="pt")
-                        print("prompt2")
-                        print(prompt)
-                        instruct_prompt_hidden_states = text_encoder(prompt["input_ids"].to(device))[0]
-
-
-                        if instruct == "txt2img":
-                            text_hidden_states = text_encoder(input_ids)[0]
-
-                            zeros = torch.zeros_like(instruct_prompt_hidden_states)
-                            # stack the hidden states with padding zeros
-                            instruct_hidden_states = torch.cat(
-                                [
-                                    instruct_prompt_hidden_states,
-                                    text_hidden_states,
-                                    zeros,
-                                    zeros,
-                                    zeros,
-                                ],
-                                dim=1,
-                            )
-
-                            all_states.append(instruct_hidden_states)
-
-                        elif instruct == "img2img":
-                            image = (pixel_values + 1) / 2
-                            image_inputs = clip_processor(images=image, return_tensors="pt")
-                            image_embedding = clip_model.get_image_features(**image_inputs.to(device))
-                            image_embedding = image_embedding.unsqueeze(0)
-
-                            zeros = torch.zeros_like(instruct_prompt_hidden_states)
-                            # Debug sizes of stack
-                            print("sizes")
-                            print(instruct_prompt_hidden_states.shape)
-                            print(image_embedding.shape)
-                            print(zeros.shape)
-
-                            # stack the hidden states with padding zeros
-                            instruct_hidden_states = torch.cat(
-                                [
-                                    instruct_prompt_hidden_states,
-                                    image_embedding,
-                                    zeros,
-                                    zeros,
-                                    zeros,
-                                ],
-                                dim=1,
-                            )
-
-                            all_states.append(instruct_hidden_states)
-
-                        elif instruct == "mix":
-                            image = (pixel_values + 1 ) / 2
-                            image_input = clip_processor(images=image, return_tensors="pt")
-                            image_embedding = clip_model.get_image_features(**image_input.to(device))
-
-                            # We want to use a random amount between 2-5
-                            amount = random.randint(2, 5)
-                            # Now assign each to text or image so make each a random binary
-                            text_or_image = torch.randint(0, 2, (amount,)).to(device)
-
-                            # Split into num_image_to_search and num_text_to_search
-                            num_text_to_search = torch.sum(text_or_image == 0)
-                            num_image_to_search = torch.sum(text_or_image == 1)
-
-                            # Ensure num_image_to_search and num_text_to_search are of type int
-                            num_image_to_search = int(num_image_to_search.item())
-                            num_text_to_search = int(num_text_to_search.item())
-
-
-                            all_neighbors = []
-                            # Get nearest image neighbors
-                            if num_image_to_search > 0:
-                                _, image_neighbors = aux_image_index.search(
-                                    image_embedding.detach().cpu().numpy(), num_image_to_search
-                                )
-                                all_neighbors.append(image_neighbors)
-                            else:
-                                image_neighbors = []
-
-
-                            if num_text_to_search > 0:
-                                _, text_neighbors = aux_text_index.search(
-                                    image_embedding.detach().cpu().numpy(), num_text_to_search
-                                )
-                                print("text_neighbors")
-                                print(text_neighbors.shape)
-                                all_neighbors.append(text_neighbors)
-                            else:
-                                text_neighbors = []
-
-                            print("num_image_to_search")
-                            print(num_image_to_search)
-                            print("num_text_to_search")
-                            print(num_text_to_search)
-
-                            # print length of neighbors
-                            print("all_neighbors")
-                            print(len(all_neighbors))
-                            print("image_neighbors")
-                            print(len(image_neighbors))
-                            print("text_neighbors")
-                            print(len(text_neighbors))
-
-
-                            all = [
-                                instruct_prompt_hidden_states,
-                            ]
-
-
-                            # Add all neighbors from np array to all
-                            for np in all_neighbors:
-                                print("appending np")
-                                neighbors = torch.from_numpy(np).to(device)
-                                print(neighbors.shape)
-                                all.append(neighbors)
-
-                            # Get the number of zeros to append
-                            zero_count = 5 - amount
-
-                            # append zeros
-                            for i in range(zero_count):
-                                print("appending zeros")
-                                zeros = torch.zeros_like(instruct_prompt_hidden_states)
-                                print(zeros.shape)
-                                all.append(zeros)
-                            
-                            # print all
-                            print("All")
-                            for i in all:
-                                print(i.shape)
-
-                            # stack
-                            instruct_hidden_states = torch.cat(
-                                all,
-                                dim=1,
-                            )
-                            all_states.append(instruct_hidden_states)
-
-                    print(all_states)
-                    print("All states shape")
-                    for i in all_states:
-                        print(i.shape)
-
-                    return torch.cat(all_states, dim=0)
-
-                encoder_hidden_states = get_instruct_hidden_states(batch)
-
                 # Get the text embedding for conditioning
-                # encoder_hidden_states = text_encoder(batch["input_ids"])[0]
+                encoder_hidden_states = text_encoder(batch["input_ids"])[0]
 
                 # Predict the noise residual
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                model_pred = unet(
+                    noisy_latents, timesteps, encoder_hidden_states
+                ).sample
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -1728,7 +1768,9 @@ def main(args):
                 elif noise_scheduler.config.prediction_type == "v_prediction":
                     target = noise_scheduler.get_velocity(latents, noise, timesteps)
                 else:
-                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                    raise ValueError(
+                        f"Unknown prediction type {noise_scheduler.config.prediction_type}"
+                    )
 
                 if args.with_prior_preservation:
                     # Chunk the noise and model_pred into two parts and compute the loss on each part separately.
@@ -1736,15 +1778,21 @@ def main(args):
                     target, target_prior = torch.chunk(target, 2, dim=0)
 
                     # Compute instance loss
-                    loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                    loss = F.mse_loss(
+                        model_pred.float(), target.float(), reduction="mean"
+                    )
 
                     # Compute prior loss
-                    prior_loss = F.mse_loss(model_pred_prior.float(), target_prior.float(), reduction="mean")
+                    prior_loss = F.mse_loss(
+                        model_pred_prior.float(), target_prior.float(), reduction="mean"
+                    )
 
                     # Add the prior loss to the instance loss.
                     loss = loss + args.prior_loss_weight * prior_loss
                 else:
-                    loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                    loss = F.mse_loss(
+                        model_pred.float(), target.float(), reduction="mean"
+                    )
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
@@ -1765,7 +1813,9 @@ def main(args):
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                        save_path = os.path.join(
+                            args.output_dir, f"checkpoint-{global_step}"
+                        )
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
@@ -1777,12 +1827,19 @@ def main(args):
                 break
 
             if accelerator.is_main_process:
-                if args.save_model_every_n_steps != None and (global_step % args.save_model_every_n_steps) == 0:
+                if (
+                    args.save_model_every_n_steps != None
+                    and (global_step % args.save_model_every_n_steps) == 0
+                ):
                     save_model(accelerator, unet, text_encoder, args, global_step)
 
                 if args.sample_model_every_n_steps != None:
-                    if (global_step % args.sample_model_every_n_steps) == 0 or global_step == 1:
-                        sample_model(accelerator, unet, text_encoder, vae, args, global_step)
+                    if (
+                        global_step % args.sample_model_every_n_steps
+                    ) == 0 and global_step > 5:
+                        sample_model(
+                            accelerator, unet, text_encoder, vae, args, global_step
+                        )
 
         accelerator.wait_for_everyone()
 
