@@ -12,7 +12,7 @@ A script for binning a dataset into aspect ratio buckets for training on mulitpl
 
 ### Training scripts
 
-####Instruct train:
+#### Instruct train:
 A script that trains for data mixing
-####Aspect Train
+#### Aspect Train
 A script that trains on bucketed aspect ratio data(Reccomended gradient accumulation)
