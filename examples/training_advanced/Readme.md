@@ -1,5 +1,6 @@
 
-Data scripts has:
+#### Data scripts
+
 
 BLIP_label.py
 
@@ -9,7 +10,7 @@ BIN_ASPECT.py
 
 A script for binning a dataset into aspect ratio buckets for training on mulitple dimensional data
 
-Training scripts has:
+#### Training scripts
 
 Instruct train:
 A script that trains for data mixing
