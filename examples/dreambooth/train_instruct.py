@@ -55,6 +55,8 @@ aux_image_embeddings = []
 aux_text_embeddings = []
 instruction_map = {}
 
+# TODO: Write an instruct sample set
+
 # Define a function to load images and perform pre-processing
 
 
@@ -108,7 +110,10 @@ def pre_compute(directory, image_files, instructions, cache_dir):
                 text_embedding = clip_model.get_text_features(**text_inputs.to(device))
             text_embedding /= text_embedding.norm(dim=-1, keepdim=True)
 
-            image_text_map[image_file] = {"image_embedding": image_embedding.cpu(), "text_embedding": text_embedding.cpu()}
+            image_text_map[image_file] = {
+                "image_embedding": image_embedding.cpu(),
+                "text_embedding": text_embedding.cpu(),
+            }
 
         # Save all embeddings to a single cache file
         torch.save({"instruction_map": instruction_map, "image_text_map": image_text_map}, cache_path)
@@ -1075,7 +1080,7 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
 
                     # preprocess the prompt
                     instruct_prompt = clip_processor(text=instruct_prompt, return_tensors="pt")
-                    instruct_prompt_hidden_states = instructtext_encoder(prompt)[0]
+                    instruct_prompt_hidden_states = text_encoder(prompt)[0]
 
                     if instruct == "txt2img":
                         text_ids = clip_processor(text=text, return_tensors="pt")
@@ -1093,9 +1098,10 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
                             ],
                             dim=1,
                         )
-                        return instuct_hidden_states
 
-                prompt_emebds = get_prompt_embeds("txt2img")
+                    return instruct_hidden_states
+
+                prompt_embeds = get_prompt_embeds()
 
                 images = pipeline(
                     prompt_embeds=prompt_embeds,
@@ -1401,7 +1407,10 @@ def main(args):
             optimizer, args.lr_warmup_steps, total_steps, lr_end=args.lr_end, power=args.lr_power, last_epoch=-1
         )
     elif args.lr_scheduler == "cyclical":
-        def clr_fn(x): return 1 / (5 ** (x * 0.0001))
+
+        def clr_fn(x):
+            return 1 / (5 ** (x * 0.0001))
+
         lr_scheduler = torch.optim.lr_scheduler.CyclicLR(
             optimizer,
             base_lr=args.lr_end,
