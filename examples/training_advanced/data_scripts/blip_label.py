@@ -1,3 +1,5 @@
+from transformers import Blip2Processor, Blip2ForConditionalGeneration
+import requests
 import torch
 import os
 
@@ -7,22 +9,18 @@ import glob
 from PIL import Image
 
 parser = argparse.ArgumentParser()
-from PIL import Image
-import requests
-from transformers import Blip2Processor, Blip2ForConditionalGeneration
-import torch
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 print("Loading models")
 
-processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
-model = Blip2ForConditionalGeneration.from_pretrained(
-    "Salesforce/blip2-opt-2.7b", torch_dtype=torch.float16
-)
+model_id = "Salesforce/blip2-flan-t5-xxl"
+processor = Blip2Processor.from_pretrained(model_id)
+model = Blip2ForConditionalGeneration.from_pretrained(model_id, torch_dtype=torch.float16)
 model.to(device)
 
 print("Done loading models")
+
 
 def get_caption(image):
 
@@ -32,6 +30,7 @@ def get_caption(image):
     generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
     return generated_text
+
 
 # Folder containing the images
 parser.add_argument('--image_folder', type=str, required=True)
@@ -76,8 +75,6 @@ def all_images(image_folder, nested=False):
         return all_images_flat(image_folder)
 
 
-
-
 instruct = "Your instructions are to complete the text with maximum information coverage completing the captions by appending lots of items with commas, complete the following: "
 questions = {
     "syn-face": [
@@ -97,6 +94,14 @@ questions = {
         "Question: What would be on the museum plaque for this image?",
         "Instructions: Write a long poem about the art piece; Long Poem:",
         "How many colors are in the image and what are the top 5?",
+    ],
+    "mj_dump": [
+        "If this is a product, describe it's type, and what it does. Product Description:",
+        "If this is people, say how many people are in the image, and what they are doing. People Description:",
+        "If this is a place, describe the place. Place Description:",
+        "If this is a thing, describe the thing. Thing Description:",
+        "If this is a scene, describe the scene. Scene Description:",
+        "Describe the color of the image. Color Description:",
     ]
 }
 
@@ -115,11 +120,11 @@ for image_file in all_i:
         captions = []
         # For arg in questions
         for q in questions[args.questions]:
-           inputs = processor(images=image_raw, text=q, return_tensors="pt").to(device, torch.float16)
-           generated_ids = model.generate(**inputs)
-           generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
-           print(generated_text)
-           captions.append(generated_text)
+            inputs = processor(images=image_raw, text=q, return_tensors="pt").to(device, torch.float16)
+            generated_ids = model.generate(**inputs)
+            generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
+            print(generated_text)
+            captions.append(generated_text)
 
         caption_adv = (";").join(captions)
 
@@ -128,7 +133,6 @@ for image_file in all_i:
     caption = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
     if caption_adv:
         caption = caption + "; " + caption_adv
-
 
     if args.folder_name:
         # get the parent folder name
@@ -160,5 +164,3 @@ for image_file in all_i:
         print("Saving: " + new_path)
     except FileExistsError:
         print("Skipping " + image_file + " as " + new_path + " already exists")
-
-
