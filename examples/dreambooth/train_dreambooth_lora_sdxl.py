@@ -56,6 +56,8 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
+from diffusers.training_utils import EMAModel
+
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.20.0.dev0")
@@ -369,6 +371,7 @@ def parse_args(input_args=None):
             " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
         ),
     )
+    parser.add_argument("--use_ema", action="store_true", help="Whether to use EMA model.")
     parser.add_argument(
         "--report_to",
         type=str,
@@ -752,6 +755,16 @@ def main(args):
 
     text_encoder_one.to(accelerator.device, dtype=weight_dtype)
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
+
+    # Create EMA for the unet.
+    if args.use_ema:
+        ema_unet = UNet2DConditionModel.from_pretrained(
+            args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
+        )
+        ema_unet = EMAModel(ema_unet.parameters(), model_cls=UNet2DConditionModel, model_config=ema_unet.config)
+
+        print("! Warning")
+        print("EMA not implimented yet")
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
