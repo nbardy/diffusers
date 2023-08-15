@@ -55,6 +55,22 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
+# Function to process the "cinema" type
+def process_cinema_type(cinema_type):
+    path = cinema_type["path"]
+    csv_path = cinema_type["csv"]
+    keys = cinema_type["keys"]
+
+    # Copy the tree structure of images
+    dest_folder = os.path.join(args.dataset_name, "cinema")
+    copy_dataset(path, dest_folder)
+
+    # Rename the captions.csv to metadata.csv
+    rename_csv(dest_folder, "captions.csv", "metadata.csv")
+
+    # Map the old keys to the new keys
+    mapCSV(dest_folder, "metadata.csv", "metadata.csv", keys, ["image", "text"])
+
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.19.0.dev0")

@@ -36,10 +36,13 @@ more = {
     "minimal": "Facet_SD_Dataset/Minimalissimo/",
     "photo": "Facet_SD_Dataset/Unsplash",
     "photo product": "Facet_SD_Dataset/Unsplash/Product",
-    "cinema": "moviestills/data/evanerichards",
+    # TODO: Support this type
+    "cinema": {
+        "path": "moviestills/data/evanerichards",
+        "csv": "/Users/nicholasbardy/git/dataset_raw/film_labeled_blip_t5xx/captions.csv",
+        "keys": ["image_path", "caption"],
+    },
 }
-
-# more
 
 
 def save_progress(progress):
@@ -72,6 +75,45 @@ def git_repo_exists(username, dataset_name):
     except subprocess.CalledProcessError:
         # If cloning fails, repository does not exist
         return False
+
+
+#
+# Utils over file system copy
+#
+def copy_dataset(src_folder, dest_folder):
+    if os.path.exists(dest_folder):
+        print(f"{dest_folder} already exists.")
+        return False
+    shutil.copytree(src_folder, dest_folder)
+    print(f"Copied dataset from {src_folder} to {dest_folder}")
+    return True
+
+
+def rename_csv(folder, old_name, new_name):
+    old_path = os.path.join(folder, old_name)
+    new_path = os.path.join(folder, new_name)
+    if not os.path.exists(old_path):
+        print(f"{old_name} not found in {folder}.")
+        return False
+    os.rename(old_path, new_path)
+    print(f"Renamed {old_name} to {new_name}")
+    return True
+
+
+# copy with added header rewrite
+def mapCSV(folder, old_csv_name, new_csv_name, columnsIn, columnsOut):
+    old_path = os.path.join(folder, old_csv_name)
+    new_path = os.path.join(folder, new_csv_name)
+    if not os.path.exists(old_path):
+        print(f"{old_csv_name} not found in {folder}.")
+        return False
+
+    df = pd.read_csv(old_path)
+    new_df = df[columnsIn]
+    new_df.columns = columnsOut
+    new_df.to_csv(new_path, index=False)
+    print(f"Mapped CSV saved to {new_path}")
+    return True
 
 
 # Should create file if needed other wise append the line,
