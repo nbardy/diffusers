@@ -13,6 +13,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 
+import wandb
+from dctorch import functional as DF
 import argparse
 import hashlib
 import itertools
@@ -116,31 +118,31 @@ prompts_with_size = [
     {"prompt": "A cat that looks like a bear; super animal; super image; realistic", "size": (768, 884)},
     {
         "prompt": "The end of the world, Nucleur Apocolypse, Starfish on a Beach; super film; super image; realistic",
-        "size": (1024 + 64*3, 884),
+        "size": (1024 + 64 * 3, 884),
         "negativePrompt": "bad image, bad film, zoom crop, bad crop"
     },
     {
-        "prompt": "Barren Scowls; film; super image", "size": (1024 + 64*3, 884),
+        "prompt": "Barren Scowls; film; super image", "size": (1024 + 64 * 3, 884),
         "negativePrompt": "bad image, bad crop"
     },
     {
         "prompt": "A leopard fights a man; film; super realistic",
-        "size": (1024 + 64*3, 884),
+        "size": (1024 + 64 * 3, 884),
         "negativePrompt": "bad image, bad painting",
     },
     {
         "prompt": "A leopard fights a man; film; realistic",
-        "size": (1024 + 64*3, 884),
+        "size": (1024 + 64 * 3, 884),
         "negativePrompt": "bad image, bad painting"
     },
     {
         "prompt": "A leopard, a man; film; super leopard",
-        "size": (1024 + 64*3, 884),
+        "size": (1024 + 64 * 3, 884),
         "negativePrompt": "bad image, bad crop, bad leopard, bad film, bad art",
     },
     {
         "prompt": "A leopard, a man; film; super leopard; super cinema; super camera angle; super image",
-        "size": (1024 + 64*3, 884),
+        "size": (1024 + 64 * 3, 884),
         "negativePrompt": "bad image, bad crop, bad leopard, bad film, bad art",
     },
     {
@@ -179,7 +181,6 @@ prompts_with_size = [
         "size": (768, 1024),
     },
 ]
-
 
 
 def get_polynomial_decay_schedule_with_warmup(
@@ -230,11 +231,6 @@ def get_polynomial_decay_schedule_with_warmup(
 
 
 logger = get_logger(__name__)
-
-import math
-
-from dctorch import functional as DF
-import torch
 
 
 def sqrtm(x):
@@ -1079,7 +1075,6 @@ def collate_fn(examples, with_prior_preservation=False):
     input_ids += [example["super_image_prompt_ids"] for example in examples if example.get("super_image_prompt_ids") is not None]
     pixel_values += [example["super_images"] for example in examples if example.get("super_images") is not None]
 
-
     # Concat class and instance examples for prior preservation.
     # We do this to avoid doing two forward passes.
     if with_prior_preservation:
@@ -1155,11 +1150,10 @@ def save_model(accelerator, unet, text_encoder, args, step=None):
             )
 
 
-import wandb
-
 PHOTO_COUNT = 2
 
 test_inference_steps = 32
+
 
 def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
     torch_dtype = torch.float16 if accelerator.device.type == "cuda" else torch.float32
@@ -1187,7 +1181,6 @@ def sample_model(accelerator, unet, text_encoder, vae, args, step=None):
         ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config), 24, 6),
         ("euler-a", EulerAncestralDiscreteScheduler.from_config(pipeline.scheduler.config), 35, 12),
     ]
-
 
     pipeline.to(accelerator.device)
 
@@ -1581,7 +1574,7 @@ def main(args):
             last_epoch=-1,
         )
     elif args.lr_scheduler == "cyclical":
-        clr_fn = lambda x: 1 / (5 ** (x * 0.0001))
+        def clr_fn(x): return 1 / (5 ** (x * 0.0001))
         lr_scheduler = torch.optim.lr_scheduler.CyclicLR(
             optimizer,
             base_lr=args.lr_end,

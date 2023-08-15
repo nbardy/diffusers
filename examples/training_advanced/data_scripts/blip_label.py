@@ -87,7 +87,7 @@ questions = {
     ],
     "film": [
         "Describe the film scene. Film Scene:",
-        "Name and describe All the Characters in the scene. Chracter Descriptions:",
+        "Name and describe All the Characters in the scene. Character Descriptions:",
         "Question: What is the scene about?, Answer:",
     ],
     "art": [
@@ -96,12 +96,9 @@ questions = {
         "How many colors are in the image and what are the top 5?",
     ],
     "mj_dump": [
-        "If this is a product, describe it's type, and what it does. Product Description:",
+        "If this is a product, describe it's type, and what it does, otherwise leave empty, Product Description:",
         "If this is people, say how many people are in the image, and what they are doing. People Description:",
-        "If this is a place, describe the place. Place Description:",
-        "If this is a thing, describe the thing. Thing Description:",
         "If this is a scene, describe the scene. Scene Description:",
-        "Describe the color of the image. Color Description:",
     ]
 }
 
