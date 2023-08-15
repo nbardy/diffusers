@@ -169,9 +169,10 @@ def parse_args(input_args=None):
         help="The prompt to specify images in the same class as provided instance images.",
     )
     parser.add_argument(
-        "--validation_prompt",
+        "--validation_prompts",
         type=str,
         default=None,
+        nargs="+",
         help="A prompt that is used during validation to verify that the model is learning.",
     )
     parser.add_argument(
@@ -1207,10 +1208,10 @@ def main(args):
                 break
 
         if accelerator.is_main_process:
-            if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
+            if args.validation_prompts is not None and epoch % args.validation_epochs == 0:
                 logger.info(
                     f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
-                    f" {args.validation_prompt}."
+                    f" {args.validation_prompts}."
                 )
                 # create pipeline
                 if not args.train_text_encoder:
@@ -1250,13 +1251,18 @@ def main(args):
 
                 # run inference
                 generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
-                pipeline_args = {"prompt": args.validation_prompt}
+                # convert
+                for prompt in args.validation_prompts:
+                    pipeline_args = {"prompt": prompt}
 
-                with torch.cuda.amp.autocast():
-                    images = [
-                        pipeline(**pipeline_args, generator=generator).images[0]
-                        for _ in range(args.num_validation_images)
-                    ]
+                    images = []
+                    with torch.cuda.amp.autocast():
+                        images.append(
+                            [
+                                pipeline(**pipeline_args, generator=generator).images[0]
+                                for _ in range(args.num_validation_images)
+                            ]
+                        )
 
                 for tracker in accelerator.trackers:
                     if tracker.name == "tensorboard":
@@ -1266,7 +1272,7 @@ def main(args):
                         tracker.log(
                             {
                                 "validation": [
-                                    wandb.Image(image, caption=f"{i}: {args.validation_prompt}")
+                                    wandb.Image(image, caption=f"{i}: {args.validation_prompts[i]}")
                                     for i, image in enumerate(images)
                                 ]
                             }
