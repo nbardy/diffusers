@@ -289,6 +289,12 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
+        "--prediction_type",
+        type=str,
+        default=None,
+        help="The prediction_type that shall be used for training. Choose between 'epsilon' or 'v_prediction' or leave `None`. If left to `None` the default prediction type of the scheduler: `noise_scheduler.config.prediciton_type` is chosen.",
+    )
+    parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
         default=1,
@@ -713,6 +719,7 @@ def main(args):
         subfolder="scheduler",
         rescale_betas_zero_snr=args.scale_scheduler,
         timestep_spacing="trailing" if args.scale_scheduler else None,
+        prediction_type=args.prediction_type,
     )
 
     text_encoder_one = text_encoder_cls_one.from_pretrained(

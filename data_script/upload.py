@@ -14,6 +14,9 @@ org = "facet"
 PROGRESS_FILE = "progress.json"
 
 # Directory containing the images
+facsed = "/Users/nicholasbardy/git/cluster/"
+
+# Directory containing the images
 image_dirs = {
     "super image": "/Users/nicholasbardy/Downloads/Users/nicholasbardy/Downloads",
     "modern": "/Users/nicholasbardy/Desktop/datasets/unsplash_with_labels/images_labeled",
@@ -22,21 +25,23 @@ image_dirs = {
     "super special image": "/Users/nicholasbardy/Desktop/datasets/SDXL 1.0 search images/all",
     "exciting super contest image": "/Users/nicholasbardy/Desktop/sdxl_comp_images/exciting",
     "pro super contest image": "/Users/nicholasbardy/Desktop/sdxl_comp_images/pro",
-    "normal render": "Facet_SD_Dataset/Behance/Style/",
-    "high_fashion": "Facet_SD_Dataset/Zara",
-    "architecture": "Facet_SD_Dataset/Minimalissimo/Architecture/",
-    "model": "Facet_SD_Dataset/Loewe/Person",
-    "design": "Facet_SD_Dataset/Dribbble",
-    "engineering": "Facet_SD_Dataset/TeenageEngineering/Product",
-    "minimal": "Facet_SD_Dataset/Minimalissimo/",
-    "photo": "Facet_SD_Dataset/Unsplash",
-    "photo product": "Facet_SD_Dataset/Unsplash/Product",
+    "normal render": facsed + "Facet_SD_Dataset/Behance/Style/",
+    "high_fashion": facsed + "Facet_SD_Dataset/Zara",
+    "architecture": facsed + "Facet_SD_Dataset/Minimalissimo/Architecture/",
+    "model": facsed + "Facet_SD_Dataset/Loewe/Person",
+    "design": facsed + "Facet_SD_Dataset/Dribbble",
+    "engineering": facsed + "Facet_SD_Dataset/TeenageEngineering/Product",
+    "minimal": facsed + "Facet_SD_Dataset/Minimalissimo/",
+    "photo": facsed + "Facet_SD_Dataset/Unsplash",
+    "photo product": facsed + "Facet_SD_Dataset/Unsplash/Product",
     "cinema": {
         "csv": "/Users/nicholasbardy/git/dataset_raw/film_labeled_blip_t5xxl/captions.csv",
         "path": "/Users/nicholasbardy/git/dataset_raw",
         "keys": ["image_path", "caption"],
     },
 }
+
+""
 
 
 def save_progress(progress):
@@ -215,7 +220,12 @@ def make_dataset():
             full_image_path = os.path.join(image_dir, image_path)
 
             # Read image using Pillow
-            image_pil = PILImage.open(full_image_path)
+            try:
+                image_pil = PILImage.open(full_image_path)
+            except Exception as e:
+                # skip if image is not readable
+                print(f"Skipping {full_image_path} due to {e}")
+                continue
 
             # Tags and labeling code
             image_tags = []  # Process tags as per requirements
