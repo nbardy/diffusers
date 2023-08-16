@@ -55,22 +55,6 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
-# Function to process the "cinema" type
-def process_cinema_type(cinema_type):
-    path = cinema_type["path"]
-    csv_path = cinema_type["csv"]
-    keys = cinema_type["keys"]
-
-    # Copy the tree structure of images
-    dest_folder = os.path.join(args.dataset_name, "cinema")
-    copy_dataset(path, dest_folder)
-
-    # Rename the captions.csv to metadata.csv
-    rename_csv(dest_folder, "captions.csv", "metadata.csv")
-
-    # Map the old keys to the new keys
-    mapCSV(dest_folder, "metadata.csv", "metadata.csv", keys, ["image", "text"])
-
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.19.0.dev0")
@@ -1168,10 +1152,10 @@ def main(args):
                 break
 
         if accelerator.is_main_process:
-            if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
+            if args.validation_prompts is not None and epoch % args.validation_epochs == 0:
                 logger.info(
                     f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
-                    f" {args.validation_prompt}."
+                    f" {args.validation_prompts}."
                 )
                 # create pipeline
                 if not args.train_text_encoder:
@@ -1198,13 +1182,17 @@ def main(args):
 
                 # run inference
                 generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
-                pipeline_args = {"prompt": args.validation_prompt}
 
                 with torch.cuda.amp.autocast():
-                    images = [
-                        pipeline(**pipeline_args, generator=generator).images[0]
-                        for _ in range(args.num_validation_images)
-                    ]
+                    images = []
+                    for prompt in args.validation_prompts:
+                        pipeline_args = {"prompt": prompt}
+                        images.append(
+                            [
+                                pipeline(**pipeline_args, generator=generator).images[0]
+                                for _ in range(args.num_validation_images)
+                            ]
+                        )
 
                 for tracker in accelerator.trackers:
                     if tracker.name == "tensorboard":
@@ -1214,7 +1202,7 @@ def main(args):
                         tracker.log(
                             {
                                 "validation": [
-                                    wandb.Image(image, caption=f"{i}: {args.validation_prompt}")
+                                    wandb.Image(image, caption=f"{i}: {args.validation_prompts[i]}")
                                     for i, image in enumerate(images)
                                 ]
                             }

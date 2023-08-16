@@ -22,11 +22,6 @@ image_dirs = {
     "super special image": "/Users/nicholasbardy/Desktop/datasets/SDXL 1.0 search images/all",
     "exciting super contest image": "/Users/nicholasbardy/Desktop/sdxl_comp_images/exciting",
     "pro super contest image": "/Users/nicholasbardy/Desktop/sdxl_comp_images/pro",
-}
-
-
-image_dirs2 = image_dirs.copy()
-more = {
     "normal render": "Facet_SD_Dataset/Behance/Style/",
     "high_fashion": "Facet_SD_Dataset/Zara",
     "architecture": "Facet_SD_Dataset/Minimalissimo/Architecture/",
@@ -36,10 +31,9 @@ more = {
     "minimal": "Facet_SD_Dataset/Minimalissimo/",
     "photo": "Facet_SD_Dataset/Unsplash",
     "photo product": "Facet_SD_Dataset/Unsplash/Product",
-    # TODO: Support this type
     "cinema": {
-        "path": "moviestills/data/evanerichards",
-        "csv": "/Users/nicholasbardy/git/dataset_raw/film_labeled_blip_t5xx/captions.csv",
+        "csv": "/Users/nicholasbardy/git/dataset_raw/film_labeled_blip_t5xxl/captions.csv",
+        "path": "/Users/nicholasbardy/git/dataset_raw",
         "keys": ["image_path", "caption"],
     },
 }
@@ -54,10 +48,14 @@ def load_progress():
     if os.path.exists(PROGRESS_FILE):
         with open(PROGRESS_FILE, "r") as f:
             return json.load(f)
-    return None
+    return {}
+
+
+progress = load_progress()
 
 
 def update_progress(newp):
+    global progress
     progress = load_progress()
     if progress:
         progress.update(newp)
@@ -75,45 +73,6 @@ def git_repo_exists(username, dataset_name):
     except subprocess.CalledProcessError:
         # If cloning fails, repository does not exist
         return False
-
-
-#
-# Utils over file system copy
-#
-def copy_dataset(src_folder, dest_folder):
-    if os.path.exists(dest_folder):
-        print(f"{dest_folder} already exists.")
-        return False
-    shutil.copytree(src_folder, dest_folder)
-    print(f"Copied dataset from {src_folder} to {dest_folder}")
-    return True
-
-
-def rename_csv(folder, old_name, new_name):
-    old_path = os.path.join(folder, old_name)
-    new_path = os.path.join(folder, new_name)
-    if not os.path.exists(old_path):
-        print(f"{old_name} not found in {folder}.")
-        return False
-    os.rename(old_path, new_path)
-    print(f"Renamed {old_name} to {new_name}")
-    return True
-
-
-# copy with added header rewrite
-def mapCSV(folder, old_csv_name, new_csv_name, columnsIn, columnsOut):
-    old_path = os.path.join(folder, old_csv_name)
-    new_path = os.path.join(folder, new_csv_name)
-    if not os.path.exists(old_path):
-        print(f"{old_csv_name} not found in {folder}.")
-        return False
-
-    df = pd.read_csv(old_path)
-    new_df = df[columnsIn]
-    new_df.columns = columnsOut
-    new_df.to_csv(new_path, index=False)
-    print(f"Mapped CSV saved to {new_path}")
-    return True
 
 
 # Should create file if needed other wise append the line,
@@ -156,6 +115,10 @@ def copy_if_not_exists(src, dest):
     return True
 
 
+def is_csv(image_dir):
+    return isinstance(image_dir, dict) and "path" in image_dir and "csv" in image_dir and "keys" in image_dir
+
+
 # Split size
 SPLIT_SIZE = 1000
 
@@ -169,9 +132,6 @@ args = parser.parse_args()
 
 default_tags = ["image"]
 
-# Load existing progress
-progress = load_progress()
-
 
 SPLIT_SIZE = 1000
 
@@ -182,15 +142,63 @@ parser.add_argument("--use_dir_name", action="store_true", help="Use directory n
 args = parser.parse_args()
 
 default_tags = ["image"]
-progress = load_progress()
+
+
+def rename_csv(folder, old_name, new_name):
+    old_path = os.path.join(folder, old_name)
+    new_path = os.path.join(folder, new_name)
+    if not os.path.exists(old_path):
+        print(f"{old_name} not found in {folder}.")
+        return False
+    os.rename(old_path, new_path)
+    print(f"Renamed {old_name} to {new_name}")
+    return True
+
+
+def mapCSV(folder, old_csv_name, new_csv_name, columnsIn, columnsOut):
+    old_path = os.path.join(folder, old_csv_name)
+    new_path = os.path.join(folder, new_csv_name)
+    if not os.path.exists(old_path):
+        print(f"{old_csv_name} not found in {folder}.")
+        return False
+
+    df = pd.read_csv(old_path)
+    new_df = df[columnsIn]
+    new_df.columns = columnsOut
+    new_df.to_csv(new_path, index=False)
+    print(f"Mapped CSV saved to {new_path}")
+    return True
+
+
+def copy_dataset(image_dir):
+    cinema_path = image_dir["path"]
+    cinema_keys = image_dir["keys"]
+
+    # Copy tree structure of images
+    dest_folder = os.path.join(args.dataset_name, "cinema")
+    copy_dataset(cinema_path, dest_folder)
+
+    # Rename captions.csv to metadata.csv
+    rename_csv(dest_folder, "captions.csv", "metadata.csv")
+
+    # Rename the header based on mapping keys
+    mapCSV(dest_folder, "metadata.csv", "metadata.csv", cinema_keys, ["image_path", "caption"])
 
 
 def make_dataset():
+    global progress
+
     for category, image_dir in image_dirs.items():
         if progress and category == progress["category"]:
             start_idx = progress["index"]
         else:
             start_idx = 0
+
+        # detect to copy labels
+        if is_csv(image_dir):
+            copy_dataset(image_dir)
+
+            continue
 
             # Skip images until the start index if needed
         all_images = all_image_iterable(image_dir)
