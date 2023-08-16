@@ -182,8 +182,9 @@ def parse_args(input_args=None):
         help="The column of the dataset containing a caption or a list of captions.",
     )
     parser.add_argument(
-        "--validation_prompt",
+        "--validation_prompts",
         type=str,
+        nargs="+",
         default=None,
         help="A prompt that is used during validation to verify that the model is learning.",
     )
