@@ -176,18 +176,21 @@ def mapCSV(folder, old_csv_name, new_csv_name, columnsIn, columnsOut):
 
 
 def copy_dataset(image_dir):
-    cinema_path = image_dir["path"]
-    cinema_keys = image_dir["keys"]
+    path = image_dir["path"]
+    keys = image_dir["keys"]
+    csv = image_dir["csv"]
 
-    # Copy tree structure of images
-    dest_folder = os.path.join(args.dataset_name, "cinema")
-    copy_dataset(cinema_path, dest_folder)
+    # copy dir
+    dest_folder = os.path.join(args.dataset_name, path)
+    if os.path.exists(dest_folder):
+        print(f"Dataset already exists at {dest_folder}")
+        return False
 
-    # Rename captions.csv to metadata.csv
-    rename_csv(dest_folder, "captions.csv", "metadata.csv")
+    # copy csv
+    shutil.copy(csv, dest_folder)
 
-    # Rename the header based on mapping keys
-    mapCSV(dest_folder, "metadata.csv", "metadata.csv", cinema_keys, ["image_path", "caption"])
+    # map
+    mapCSV(dest_folder, os.path.basename(csv), "metadata.csv", keys, ["image", "text"])
 
 
 def make_dataset():
@@ -255,7 +258,7 @@ def make_dataset():
 
 
 # check that not done
-if progress.get("make_dataset", False):
+if not progress.get("make_dataset", False):
     print("Already made dataset")
 else:
     print("Making dataset")
@@ -271,14 +274,18 @@ else:
 
 
 # Create the repository
-if progress.get("create_repo", False):
+if not progress.get("create_repo", False):
+    print("creating repo")
     # in python now
     create_repo(org + "/" + args.dataset_name, private=True)
 
     update_progress({"make_dataset": True, "start_upload": 0, "create_repo": True})
+else:
+    print("Already created repo")
 
 # with multline string for each command using line breaks
-if progress.get("upload", False):
+if not progress.get("upload", False):
+    print("uploading")
     # if not git init
     if subprocess.run(f"cd {args.dataset_name} && git status", shell=True).returncode != 0:
         subprocess.run(f"cd {args.dataset_name} && git init && git lfs install", shell=True)
@@ -299,3 +306,11 @@ if progress.get("upload", False):
     subprocess.run(f"cd {args.dataset_name} && git push origin main", shell=True)
 
     update_progress({"make_dataset": True, "start_upload": 0, "create_repo": True, "upload": True})
+    print("Done uploading")
+else:
+    print("Already uploaded")
+
+# print HF url with border
+print("| == Dataset URL == |")
+print(f"https://huggingface.co/datasets/{args.username}/{args.dataset_name}")
+print("| ================= |")
