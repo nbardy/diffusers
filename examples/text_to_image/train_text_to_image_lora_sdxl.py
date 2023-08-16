@@ -348,6 +348,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
     )
+    parser.add_argument("--use_ema", action="store_true", default=False, help="Train with EMA")
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
@@ -428,6 +429,12 @@ def parse_args(input_args=None):
         args = parser.parse_args(input_args)
     else:
         args = parser.parse_args()
+
+    if tuse_ema:
+        print("!! Warning !!")
+        print("!! EMA not implimented TODO(nbardy) !!")
+        print("!! Warning !!")
+
 
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
