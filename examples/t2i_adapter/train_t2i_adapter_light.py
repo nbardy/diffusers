@@ -1375,7 +1375,7 @@ def main(args):
 
                 # Predict the noise residual
                 model_pred = unet(
-                    inp_noisy_latents,
+                    noisy_latents,
                     timesteps,
                     encoder_hidden_states=batch["prompt_ids"],
                     added_cond_kwargs=batch["unet_added_conditions"],
