@@ -210,10 +210,12 @@ def log_validation(vae, unet, adapter, args, accelerator, weight_dtype, step):
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
 
-    noise_scheduler = DDPMScheduler.from_pretrained(
+    noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(
         args.pretrained_model_name_or_path,
         subfolder="scheduler",
         timestep_spacing="trailing",
+        prediction_type=args.prediction_type,
+        use_karras_sigmas=True,
     )
     pipeline.scheduler = noise_scheduler
 
@@ -764,6 +766,12 @@ def parse_args(input_args=None):
         default=0,
         help="How many steps to delay adapter training by, allows a warmup stage in training the diffusion model",
     )
+    parser.add_argument(
+        "--scheduler",
+        type=str,
+        default="DDPM",
+        help="Options: DPK, DDPM",
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1029,12 +1037,22 @@ def main(args):
     )
 
     # Load scheduler and models
-    noise_scheduler = DDPMScheduler.from_pretrained(
-        args.pretrained_model_name_or_path,
-        subfolder="scheduler",
-        scale_timesteps=args.scale_scheduler,
-    )
-
+    if args.scheduler is "DDPM":
+        noise_scheduler = DDPMScheduler.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="scheduler",
+            timestep_spacing="trailing",
+            prediction_type=args.prediction_type,
+        )
+    elif args.scheduler is "DPK":
+        noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="scheduler",
+            use_karras_sigmas=True,
+        )
+    else:
+        raise Error("does not match available schedulers")
+        
     text_encoder_one = text_encoder_cls_one.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
