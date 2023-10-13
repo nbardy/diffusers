@@ -210,6 +210,14 @@ def log_validation(vae, unet, adapter, args, accelerator, weight_dtype, step):
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
 
+    noise_scheduler = DDPMScheduler.from_pretrained(
+        args.pretrained_model_name_or_path,
+        subfolder="scheduler",
+        timestep_spacing="trailing",
+    )
+    pipeline.scheduler = noise_scheduler
+
+
     if args.enable_xformers_memory_efficient_attention:
         pipeline.enable_xformers_memory_efficient_attention()
 
