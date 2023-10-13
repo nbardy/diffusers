@@ -1020,11 +1020,10 @@ def main(args):
     )
 
     # Load scheduler and models
-    noise_scheduler = EulerDiscreteScheduler.from_pretrained(
-         args.pretrained_model_name_or_path,
-         timestep_spacing="trailing" if args.scale_scheduler else None,
-         subfolder="scheduler",
-         use_karras_sigmas=True,
+    noise_scheduler = DDPMScheduler.from_pretrained(
+        args.pretrained_model_name_or_path,
+        subfolder="scheduler",
+        scale_timesteps=args.scale_scheduler,
     )
 
     text_encoder_one = text_encoder_cls_one.from_pretrained(
@@ -1209,18 +1208,6 @@ def main(args):
 
         return {"prompt_embeds": prompt_embeds, **unet_added_cond_kwargs}
 
-    def get_sigmas(timesteps, n_dim=4, dtype=torch.float32):
-        sigmas = noise_scheduler.sigmas.to(device=accelerator.device, dtype=dtype)
-        schedule_timesteps = noise_scheduler.timesteps.to(accelerator.device)
-        timesteps = timesteps.to(accelerator.device)
-        
-
-        step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
-
-        sigma = sigmas[step_indices].flatten()
-        while len(sigma.shape) < n_dim:
-            sigma = sigma.unsqueeze(-1)
-        return sigma
 
     # Let's first compute all the embeddings so that we can free up the text encoders
     # from memory.
@@ -1379,10 +1366,6 @@ def main(args):
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-                # Scale the noisy latents for the UNet
-                sigmas = get_sigmas(timesteps, len(noisy_latents.shape), noisy_latents.dtype)
-                inp_noisy_latents = noisy_latents / ((sigmas**2 + 1) ** 0.5)
-
                 # Adapter conditioning.
                 t2iadapter_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
                 down_block_additional_residuals = t2iadapter(t2iadapter_image)
@@ -1398,11 +1381,6 @@ def main(args):
                     added_cond_kwargs=batch["unet_added_conditions"],
                     down_block_additional_residuals=down_block_additional_residuals,
                 ).sample
-
-
-                # Denoise the latents
-                denoised_latents = model_pred * (-sigmas) + noisy_latents
-                weighing = sigmas**-2.0
 
 
                 # Get the target for loss depending on the prediction type
