@@ -33,6 +33,7 @@ from ...schedulers import KarrasDiffusionSchedulers
 from ...utils import (
     deprecate,
     is_invisible_watermark_available,
+    is_torch_xla_available,
     logging,
     replace_example_docstring,
 )
@@ -43,6 +44,13 @@ from .pipeline_output import StableDiffusionXLPipelineOutput
 
 if is_invisible_watermark_available():
     from .watermark import StableDiffusionXLWatermarker
+
+if is_torch_xla_available():
+    import torch_xla.core.xla_model as xm
+
+    XLA_AVAILABLE = True
+else:
+    XLA_AVAILABLE = False
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -923,7 +931,11 @@ class StableDiffusionXLInstructPix2PixPipeline(
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
                     if callback is not None and i % callback_steps == 0:
-                        callback(i, t, latents)
+                        step_idx = i // getattr(self.scheduler, "order", 1)
+                        callback(step_idx, t, latents)
+
+                if XLA_AVAILABLE:
+                    xm.mark_step()
 
         if not output_type == "latent":
             # make sure the VAE is in float32 mode, as it overflows in float16
