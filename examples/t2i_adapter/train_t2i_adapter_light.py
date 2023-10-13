@@ -1023,15 +1023,10 @@ def main(args):
     noise_scheduler = EulerDiscreteScheduler.from_pretrained(
          args.pretrained_model_name_or_path,
          timestep_spacing="trailing" if args.scale_scheduler else None,
-         beta_schedule="scaled_linear" if args.scale_scheduler else "linear,
          subfolder="scheduler",
+         use_karras_sigmas=True,
     )
-    #noise_scheduler = DDPMScheduler.from_pretrained(
-    #    args.pretrained_model_name_or_path,
-    #    subfolder="scheduler",
-    #    rescale_betas_zero_snr=args.scale_scheduler,
-    #    timestep_spacing="trailing" if args.scale_scheduler else None,
-    #)
+
     text_encoder_one = text_encoder_cls_one.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
@@ -1218,6 +1213,7 @@ def main(args):
         sigmas = noise_scheduler.sigmas.to(device=accelerator.device, dtype=dtype)
         schedule_timesteps = noise_scheduler.timesteps.to(accelerator.device)
         timesteps = timesteps.to(accelerator.device)
+        
 
         step_indices = [(schedule_timesteps == t).nonzero().item() for t in timesteps]
 
