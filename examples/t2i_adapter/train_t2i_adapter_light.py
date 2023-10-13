@@ -756,6 +756,12 @@ def parse_args(input_args=None):
         default=0,
         help="How many steps to delay adapter training by, allows a warmup stage in training the diffusion model",
     )
+    parser.add_argument(
+        "--train_diffusion_for_n_steps",
+        type=int,
+        default=0,
+        help="How many steps to train the base diffusion model before freezing",
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1097,6 +1103,7 @@ def main(args):
     text_encoder_two.requires_grad_(False)
     # t2iadapter.train will be called at the correct timestep
     t2iadapter.requires_grad_(False)
+    t2iadapter.train()
     
     unet.train()
 
@@ -1154,9 +1161,13 @@ def main(args):
 
     # Optimizer creation
     params_to_optimize = t2iadapter.parameters()
-    if args.lion_opt is True:
+
+    if args.train_diffusion_for_n_steps > 0:
+        params_to_optimize = list(unet.parameters()) + list(t2iadapter.parameters())
+
+    if args.lion_opt:
         from lion_pytorch import Lion
-        optimizer = Lion(model.parameters(), lr=args.learning_rate, weight_decay=args.lion_weight_decay)
+        optimizer = Lion(params_to_optimize, lr=args.learning_rate, weight_decay=args.lion_weight_decay)
     else:
         optimizer = optimizer_class(
             params_to_optimize,
@@ -1331,6 +1342,7 @@ def main(args):
 
     image_logs = None
     did_unfreeze_adapter_step = False
+    did_freeze_unet = False
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(t2iadapter):
@@ -1338,6 +1350,10 @@ def main(args):
                     t2iadapter.requires_grad_(True)
                     t2iadapter.train()
                     did_unfreeze_adapter_step = True
+
+                if step > args.train_diffusion_for_n_steps and did_freeze_unet is False:
+                    unet.requires_grad_(False)
+                    did_freeze_unet = True
                     
                 if args.pretrained_vae_model_name_or_path is not None:
                     pixel_values = batch["pixel_values"].to(dtype=weight_dtype)
