@@ -31,6 +31,7 @@ import numpy as np
 import torch
 import torch.utils.checkpoint
 import transformers
+import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
