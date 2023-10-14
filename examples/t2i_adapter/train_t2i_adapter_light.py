@@ -48,6 +48,7 @@ import diffusers
 from diffusers import (
     AutoencoderKL,
     EulerDiscreteScheduler,
+    DPMSolverMultistepScheduler,
     DDPMScheduler,
     StableDiffusionXLAdapterPipeline,
     T2IAdapter,
@@ -209,6 +210,16 @@ def log_validation(vae, unet, adapter, args, accelerator, weight_dtype, step):
     )
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
+
+    noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(
+        args.pretrained_model_name_or_path,
+        subfolder="scheduler",
+        timestep_spacing="trailing",
+        prediction_type=args.prediction_type,
+        use_karras_sigmas=True,
+    )
+    pipeline.scheduler = noise_scheduler
+
 
     if args.enable_xformers_memory_efficient_attention:
         pipeline.enable_xformers_memory_efficient_attention()
@@ -762,6 +773,12 @@ def parse_args(input_args=None):
         default=0,
         help="How many steps to train the base diffusion model before freezing",
     )
+    parser.add_argument(
+        "--scheduler",
+        type=str,
+        default="DDPM",
+        help="Options: DPK, DDPM",
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1027,12 +1044,22 @@ def main(args):
     )
 
     # Load scheduler and models
-    noise_scheduler = DDPMScheduler.from_pretrained(
-        args.pretrained_model_name_or_path,
-        subfolder="scheduler",
-        scale_timesteps=args.scale_scheduler,
-    )
-
+    if args.scheduler == "DDPM":
+        noise_scheduler = DDPMScheduler.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="scheduler",
+            timestep_spacing="trailing",
+            prediction_type=args.prediction_type,
+        )
+    elif args.scheduler == "DPK":
+        noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="scheduler",
+            use_karras_sigmas=True,
+        )
+    else:
+        raise Error("does not match available schedulers")
+        
     text_encoder_one = text_encoder_cls_one.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
