@@ -154,24 +154,54 @@ def modulate_luminance_with_curve(luminance: torch.Tensor, control_points, args)
     return modulated_luminance
 
 point_count_choices = [2,3,4]
+
+import random  # ✔️ Import required libraries
+
+# Define some blur distributions of randomness
+# We want to learn no blur, small blur and high blur for difference ranges
+#
+# Combined with noise obstruction for different levels of information destruction
+def generate_blur_sigma():  # ⌛ Define the function
+    # Generate a random value to decide the category
+    category_prob = random.uniform(0, 1)  # [0, 1)
+    
+    # Generate the sigma value based on the chosen category
+    if category_prob < 0.2:  # 20% chance
+        sigma = 0
+    elif category_prob < 0.6:  # 40% chance
+        sigma = random.uniform(0.0, 1.0) * 3.5
+        sigma = sigma ** 2
+    else:  # 40% chance
+        sigma = random.uniform(3.5, 35.0)
+    
+    # Return the sigma value
+    return sigma
+
     
 def make_condition(image, args):
+    # Existing setup
     resolution = args.resolution
-    transform = transforms.Compose([transforms.Resize((resolution, resolution)), transforms.ToTensor()])
-    img_tensor = transform(image).unsqueeze(0)
-    luminance = generate_luminance_features(img_tensor)
-
-
-    point_count = random.choice(point_count_choices)
-    control_points = generate_points(point_count)
-
-    modulated_luminance = modulate_luminance_with_curve(luminance, control_points, args)
-
-    modulated_image = modulated_luminance.repeat(1, 3, 1, 1)  # Bx3xWx
-    modulated_image = modulated_image.squeeze(0).permute(1, 2, 0)  # Remove batch dimension and permute to WxHxC
+    transform = transforms.Compose([transforms.Resize((resolution, resolution)), transforms.ToTensor()])  # Assume these are defined elsewhere
+    img_tensor = transform(image).unsqueeze(0)  # 1xCxWxH
+    
+    luminance = generate_luminance_features(img_tensor)  # Assume this is defined elsewhere
+    
+    point_count = random.choice(point_count_choices)  # Assume point_count_choices is defined elsewhere
+    control_points = generate_points(point_count)  # Assume this is defined elsewhere
+    
+    modulated_luminance = modulate_luminance_with_curve(luminance, control_points, args)  # Assume this is defined elsewhere
+    
+    kernel_size = (random.randint(3, 21), random.randint(3, 21))  # Large kernel size range
+    sigma = generate_blur_sigma()
+    sigma = (sigma, sigma)  # Large sigma range
+    modulated_luminance = kornia.filters.gaussian_blur2d(modulated_luminance, kernel_size, sigma)  # Bx1xWxH
+    
+    modulated_image = modulated_luminance.repeat(1, 3, 1, 1)  # Bx3xWxH
+    modulated_image = modulated_image.squeeze(0).permute(1, 2, 0)  # WxHxC
     modulated_image = (modulated_image * 255).byte()  # Convert to 8-bit pixel values
-    pil_image = Image.fromarray(modulated_image.cpu().numpy(), 'RGB')
-
+    
+    pil_image = Image.fromarray(modulated_image.cpu().numpy(), 'RGB')  # Convert to PIL image
+    
     return pil_image
 
 MAX_SEQ_LENGTH = 77
