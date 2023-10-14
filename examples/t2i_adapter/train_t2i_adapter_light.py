@@ -770,7 +770,7 @@ def parse_args(input_args=None):
         "--scheduler",
         type=str,
         default=None,
-        help="Options: DPK, DDPM, Euler, (Defaults to DDIM)
+        help="Options: DPK, DDPM, Euler, (Defaults to DDIM)",
     )
 
     if input_args is not None:
