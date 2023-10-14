@@ -1321,8 +1321,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    t2iadapter, optimizer, train_dataloader, t2i_lr_scheduler, unet_lr_scheduler = accelerator.prepare(
-        t2iadapter, optimizer, train_dataloader, t2i_lr_scheduler, unet_lr_scheduler
+    unet, t2iadapter, unet_optimizer, t2i_optimizer, train_dataloader, unet_lr_scheduler, t2i_lr_scheduler = accelerator.prepare(
+        unet, t2iadapter, unet_optimizer, t2i_optimizer, train_dataloader, unet_lr_scheduler, t2i_lr_scheduler
     )
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
