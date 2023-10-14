@@ -176,6 +176,23 @@ def generate_blur_sigma():  # ⌛ Define the function
     # Return the sigma value
     return sigma
 
+def generate_odd_number(a, b):
+    # Generate a random integer within the range [a, b]
+    num = random.randint(a, b)
+    
+    # [Change] Make the number odd if it's even
+    if num % 2 == 0:
+        num += 1
+    
+    # Ensure the modified number is still within the range [a, b]
+    if num > b:
+        num = a if a % 2 != 0 else a + 1
+    
+    return num
+
+def generate_blur_size():
+    return generate_odd_number(3, 9)
+
 
 def make_condition(image, args):
     # Existing setup
@@ -190,7 +207,8 @@ def make_condition(image, args):
 
     modulated_luminance = modulate_luminance_with_curve(luminance, control_points, args)  # Assume this is defined elsewhere
 
-    kernel_size = (random.randint(3, 21), random.randint(3, 21))  # Large kernel size range
+    size = generate_blur_size()
+    kernel_size = (size, size)  # Large kernel size range
     sigma = generate_blur_sigma()
     sigma = (sigma, sigma)  # Large sigma range
     modulated_luminance = kornia.filters.gaussian_blur2d(modulated_luminance, kernel_size, sigma)  # Bx1xWxH
