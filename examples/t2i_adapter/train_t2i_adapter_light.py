@@ -769,8 +769,8 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--scheduler",
         type=str,
-        default="DDPM",
-        help="Options: DPK, DDPM",
+        default=None,
+        help="Options: DPK, DDPM, Euler, (Defaults to DDIM)
     )
 
     if input_args is not None:
@@ -1049,15 +1049,23 @@ def main(args):
             args.pretrained_model_name_or_path,
             subfolder="scheduler",
             use_karras_sigmas=True,
+            prediction_type=args.prediction_type,
         )
     elif args.scheduler is "Euler":
        noise_scheduler = EulerDiscreteScheduler.from_pretrained(
           args.pretrained_model_name_or_path,
           timestep_spacing="trailing" if args.scale_scheduler else None,
           subfolder="scheduler",
+          prediction_type=args.prediction_type,
        )
     else:
-        raise Error("Bad UI")
+       noise_scheduler = DDIMScheduler.from_pretrained(
+          args.pretrained_model_name_or_path,
+          subfolder="scheduler",
+          rescale_betas_zero_snr=args.scale_scheduler,
+          timestep_spacing="trailing" if args.scale_scheduler else None,
+          prediction_type=args.prediction_type,
+       )
         
     text_encoder_one = text_encoder_cls_one.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
