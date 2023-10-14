@@ -1010,6 +1010,8 @@ def build_noise_scheduler(args):
           prediction_type=args.prediction_type,
        )
 
+    return noise_scheduler
+
 def main(args):
     logging_dir = Path(args.output_dir, args.logging_dir)
 
