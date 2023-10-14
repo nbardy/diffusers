@@ -212,13 +212,7 @@ def log_validation(vae, unet, adapter, args, accelerator, weight_dtype, step):
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
 
-    noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(
-        args.pretrained_model_name_or_path,
-        subfolder="scheduler",
-        timestep_spacing="trailing",
-        prediction_type=args.prediction_type,
-        use_karras_sigmas=True,
-    )
+    noise_scheduler = build_noise_scheduler(args)
     pipeline.scheduler = noise_scheduler
 
 
@@ -985,6 +979,37 @@ def collate_fn(examples):
     }
 
 
+def build_noise_scheduler(args):
+    if args.scheduler == "DDPM":
+        noise_scheduler = DDPMScheduler.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="scheduler",
+            timestep_spacing="trailing",
+            prediction_type=args.prediction_type,
+        )
+    elif args.scheduler == "DPK":
+        noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="scheduler",
+            use_karras_sigmas=True,
+            prediction_type=args.prediction_type,
+        )
+    elif args.scheduler == "Euler":
+       noise_scheduler = EulerDiscreteScheduler.from_pretrained(
+          args.pretrained_model_name_or_path,
+          timestep_spacing="trailing" if args.scale_scheduler else None,
+          subfolder="scheduler",
+          prediction_type=args.prediction_type,
+       )
+    else:
+       noise_scheduler = DDIMScheduler.from_pretrained(
+          args.pretrained_model_name_or_path,
+          subfolder="scheduler",
+          rescale_betas_zero_snr=args.scale_scheduler,
+          timestep_spacing="trailing" if args.scale_scheduler else None,
+          prediction_type=args.prediction_type,
+       )
+
 def main(args):
     logging_dir = Path(args.output_dir, args.logging_dir)
 
@@ -1045,35 +1070,7 @@ def main(args):
     )
 
     # Load scheduler and models
-    if args.scheduler == "DDPM":
-        noise_scheduler = DDPMScheduler.from_pretrained(
-            args.pretrained_model_name_or_path,
-            subfolder="scheduler",
-            timestep_spacing="trailing",
-            prediction_type=args.prediction_type,
-        )
-    elif args.scheduler == "DPK":
-        noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(
-            args.pretrained_model_name_or_path,
-            subfolder="scheduler",
-            use_karras_sigmas=True,
-            prediction_type=args.prediction_type,
-        )
-    elif args.scheduler == "Euler":
-       noise_scheduler = EulerDiscreteScheduler.from_pretrained(
-          args.pretrained_model_name_or_path,
-          timestep_spacing="trailing" if args.scale_scheduler else None,
-          subfolder="scheduler",
-          prediction_type=args.prediction_type,
-       )
-    else:
-       noise_scheduler = DDIMScheduler.from_pretrained(
-          args.pretrained_model_name_or_path,
-          subfolder="scheduler",
-          rescale_betas_zero_snr=args.scale_scheduler,
-          timestep_spacing="trailing" if args.scale_scheduler else None,
-          prediction_type=args.prediction_type,
-       )
+    noise_scheduler = build_noise_scheduler(args)
         
     text_encoder_one = text_encoder_cls_one.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
@@ -1548,7 +1545,11 @@ def main(args):
                             global_step,
                         )
 
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+            logs = {
+                "loss": loss.detach().item(),
+                "unet_lr": unet_lr_scheduler.get_last_lr()[0],
+                "t2i_lr": t2i_lr_scheduler.get_last_lr()[0],
+            }
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
 
