@@ -1050,8 +1050,14 @@ def main(args):
             subfolder="scheduler",
             use_karras_sigmas=True,
         )
+    elif args.scheduler is "Euler":
+       noise_scheduler = EulerDiscreteScheduler.from_pretrained(
+          args.pretrained_model_name_or_path,
+          timestep_spacing="trailing" if args.scale_scheduler else None,
+          subfolder="scheduler",
+       )
     else:
-        raise Error("does not match available schedulers")
+        raise Error("Bad UI")
         
     text_encoder_one = text_encoder_cls_one.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
