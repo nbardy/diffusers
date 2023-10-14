@@ -47,9 +47,10 @@ from transformers import AutoTokenizer, PretrainedConfig
 import diffusers
 from diffusers import (
     AutoencoderKL,
-    EulerDiscreteScheduler,
+    DDIMScheduler,
     DPMSolverMultistepScheduler,
     DDPMScheduler,
+    EulerDiscreteScheduler,
     StableDiffusionXLAdapterPipeline,
     T2IAdapter,
     UNet2DConditionModel,
@@ -776,8 +777,8 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--scheduler",
         type=str,
-        default="DDPM",
-        help="Options: DPK, DDPM",
+        default=None,
+        help="Options: DPK, DDPM, Euler, (Defaults to DDIM)",
     )
 
     if input_args is not None:
@@ -1056,9 +1057,23 @@ def main(args):
             args.pretrained_model_name_or_path,
             subfolder="scheduler",
             use_karras_sigmas=True,
+            prediction_type=args.prediction_type,
         )
+    elif args.scheduler == "Euler":
+       noise_scheduler = EulerDiscreteScheduler.from_pretrained(
+          args.pretrained_model_name_or_path,
+          timestep_spacing="trailing" if args.scale_scheduler else None,
+          subfolder="scheduler",
+          prediction_type=args.prediction_type,
+       )
     else:
-        raise Error("does not match available schedulers")
+       noise_scheduler = DDIMScheduler.from_pretrained(
+          args.pretrained_model_name_or_path,
+          subfolder="scheduler",
+          rescale_betas_zero_snr=args.scale_scheduler,
+          timestep_spacing="trailing" if args.scale_scheduler else None,
+          prediction_type=args.prediction_type,
+       )
         
     text_encoder_one = text_encoder_cls_one.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
@@ -1128,10 +1143,8 @@ def main(args):
     vae.requires_grad_(False)
     text_encoder_one.requires_grad_(False)
     text_encoder_two.requires_grad_(False)
-    # t2iadapter.train will be called at the correct timestep
-    t2iadapter.requires_grad_(False)
-    t2iadapter.train()
     
+    t2iadapter.train()
     unet.train()
 
     if args.enable_xformers_memory_efficient_attention:
@@ -1189,15 +1202,20 @@ def main(args):
     # Optimizer creation
     params_to_optimize = t2iadapter.parameters()
 
-    if args.train_diffusion_for_n_steps > 0:
-        params_to_optimize = list(unet.parameters()) + list(t2iadapter.parameters())
-
     if args.lion_opt:
         from lion_pytorch import Lion
-        optimizer = Lion(params_to_optimize, lr=args.learning_rate, weight_decay=args.lion_weight_decay)
+        unet_optimizer = Lion(unet.parameters(), lr=args.learning_rate, weight_decay=args.lion_weight_decay)
+        t2i_optimizer = Lion(t2iadapter.parameters(), lr=args.learning_rate, weight_decay=args.lion_weight_decay)
     else:
-        optimizer = optimizer_class(
-            params_to_optimize,
+        unet_optimizer = optimizer_class(
+            unet.parameters(),
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+        t2i_optimizer = optimizer_class(
+            t2iadapter.parameters(),
             lr=args.learning_rate,
             betas=(args.adam_beta1, args.adam_beta2),
             weight_decay=args.adam_weight_decay,
@@ -1285,9 +1303,17 @@ def main(args):
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
-    lr_scheduler = get_scheduler(
+    t2i_lr_scheduler = get_scheduler(
         args.lr_scheduler,
-        optimizer=optimizer,
+        optimizer=t2i_optimizer,
+        num_warmup_steps=args.lr_warmup_steps,
+        num_training_steps=args.max_train_steps,
+        num_cycles=args.lr_num_cycles,
+        power=args.lr_power,
+    )
+    unet_lr_scheduler = get_scheduler(
+        args.lr_scheduler,
+        optimizer=unet_optimizer,
         num_warmup_steps=args.lr_warmup_steps,
         num_training_steps=args.max_train_steps,
         num_cycles=args.lr_num_cycles,
@@ -1295,8 +1321,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    t2iadapter, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        t2iadapter, optimizer, train_dataloader, lr_scheduler
+    t2iadapter, optimizer, train_dataloader, t2i_lr_scheduler, unet_lr_scheduler = accelerator.prepare(
+        t2iadapter, optimizer, train_dataloader, t2i_lr_scheduler, unet_lr_scheduler
     )
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -1368,19 +1394,10 @@ def main(args):
     )
 
     image_logs = None
-    did_unfreeze_adapter_step = False
-    did_freeze_unet = False
+
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(t2iadapter):
-                if step > args.adapter_train_delay and did_unfreeze_adapter_step is False:
-                    t2iadapter.requires_grad_(True)
-                    t2iadapter.train()
-                    did_unfreeze_adapter_step = True
-
-                if step > args.train_diffusion_for_n_steps and did_freeze_unet is False:
-                    unet.requires_grad_(False)
-                    did_freeze_unet = True
                     
                 if args.pretrained_vae_model_name_or_path is not None:
                     pixel_values = batch["pixel_values"].to(dtype=weight_dtype)
@@ -1476,8 +1493,16 @@ def main(args):
                 if accelerator.sync_gradients:
                     params_to_clip = t2iadapter.parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
-                optimizer.step()
-                lr_scheduler.step()
+
+                if step > args.adapter_train_delay:
+                    t2i_optimizer.step()
+
+                t2i_lr_scheduler.step()
+
+                if step < args.train_diffusion_for_n_steps:
+                    unet_optimizer.step()
+
+                unet_lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
