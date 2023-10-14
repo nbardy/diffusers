@@ -1497,13 +1497,14 @@ def main(args):
                 if step > args.adapter_train_delay:
                     t2i_optimizer.step()
 
-                t2i_lr_scheduler.step()
-
                 if step < args.train_diffusion_for_n_steps:
                     unet_optimizer.step()
 
+                t2i_lr_scheduler.step()
                 unet_lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=args.set_grads_to_none)
+
+                unet_optimizer.zero_grad(set_to_none=args.set_grads_to_none)
+                t2i_optimizer.zero_grad(set_to_none=args.set_grads_to_none)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
