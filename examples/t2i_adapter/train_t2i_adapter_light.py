@@ -12,6 +12,13 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
+#
+## nbardy fork of diffusers adapter training adds some varations to the training script
+# Notely:
+#  1) Lion optimizer and min-snr for faster training
+#  2) Pyramid noise for more stable training, and greater range of frequencies
+#  3) Multidataset for stiching together multiple datasets from huggingface
+#  4) Adds joint training of the adapter and the unet
 
 import argparse
 import functools
@@ -35,7 +42,7 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from datasets import load_dataset
+from datasets import load_dataset, interleave_datasets
 from huggingface_hub import create_repo, upload_folder
 from kornia.color import rgb_to_lab
 from packaging import version
@@ -90,7 +97,7 @@ def get_noise_like(x, args):
     discount = args.pyramid_noise_discount
 
     if noise_type == "white":
-        return torch.randn_like(latents)
+        return torch.randn_like(x)
     elif noise_type == "pyramid":
         noise = pyramid_noise_like(x, discount=discount, random_multiplier=True)
         return noise
@@ -646,11 +653,19 @@ def parse_args(input_args=None):
         "--dataset_name",
         type=str,
         default=None,
+        nargs="+",
         help=(
             "The name of the Dataset (from the HuggingFace hub) to train on (could be your own, possibly private,"
             " dataset). It can also be a path pointing to a local copy of a dataset in your filesystem,"
             " or to a folder containing files that 🤗 Datasets can understand."
         ),
+    )
+    parser.add_argument(
+        "--dataset_probs",
+        type=float,
+        default=None,
+        nargs="+",  # Allow multiple probabilities
+        help="The sampling probabilities for each dataset."
     )
     parser.add_argument(
         "--dataset_config_name",
@@ -805,6 +820,12 @@ def parse_args(input_args=None):
         default=0,
         help="How many steps to delay adapter training by, allows a warmup stage in training the diffusion model",
     )
+    parser.add_argument(
+        "--train_unet_for_n_steps",
+        type=int,
+        default=0,
+        help="How many steps to delay adapter training by, allows a warmup stage in training the diffusion model",
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -845,6 +866,14 @@ def parse_args(input_args=None):
 
     return args
 
+# Allows multiple caption columns with the "|"
+def get_caption(batch, args):
+    return batch[args.caption_column]
+
+# the above reequires all we want OR
+def has_caption_column(row, args):
+    return args.caption_column in row
+
 
 def get_train_dataset(args, accelerator):
     # Get the datasets: you can either provide your own training and evaluation files (see below)
@@ -853,13 +882,25 @@ def get_train_dataset(args, accelerator):
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
     if args.dataset_name is not None:
-        # Downloading and loading a dataset from the hub.
-        dataset = load_dataset(
-            args.dataset_name,
-            args.dataset_config_name,
-            cache_dir=args.cache_dir,
-           # streaming=True,
-        )
+        # Downloading and loading all datasets from the hub.
+        datasets = [
+            load_dataset(name, args.dataset_config_name, cache_dir=args.cache_dir)
+            for name in args.dataset_name
+        ]
+        datasets = [d["train"] for d in datasets]
+
+        if args.dataset_probs is not None:
+            probabilities = args.dataset_probs
+        else:
+            train_sizes = [len(dataset) for dataset in datasets]
+            probabilities = [train_size / sum(train_sizes) for train_size in train_sizes]
+
+        # Define seed
+        seed = 42
+
+        print(datasets)
+        # Interleave datasets
+        dataset = interleave_datasets(datasets, probabilities=probabilities, seed=seed)
     else:
         if args.train_data_dir is not None:
             dataset = load_dataset(
@@ -867,12 +908,10 @@ def get_train_dataset(args, accelerator):
                 cache_dir=args.cache_dir,
              #   streaming=True
             )
-        # See more about loading custom images at
-        # https://huggingface.co/docs/datasets/v2.0.0/en/dataset_script
 
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
-    column_names = dataset["train"].column_names
+    column_names = dataset.column_names
 
     # 6. Get the column names for input/target.
     if args.image_column is None:
@@ -889,8 +928,12 @@ def get_train_dataset(args, accelerator):
         caption_column = column_names[1]
         logger.info(f"caption column defaulting to {caption_column}")
     else:
-        caption_column = args.caption_column
-        if caption_column not in column_names:
+        all_have_key = True
+        for dataset in datasets:
+            if not has_caption_column(dataset[0], args):
+                all_have_key = False
+            
+        if not all_have_key:
             raise ValueError(
                 f"`--caption_column` value '{args.caption_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
@@ -906,7 +949,7 @@ def get_train_dataset(args, accelerator):
             )
 
     with accelerator.main_process_first():
-        train_dataset = dataset["train"].shuffle(seed=args.seed)
+        train_dataset = dataset.shuffle(seed=args.seed)
         if args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(args.max_train_samples))
     return train_dataset
@@ -1092,6 +1135,7 @@ def main(args):
         subfolder="vae" if args.pretrained_vae_model_name_or_path is None else None,
         revision=args.revision,
     )
+
     unet = UNet2DConditionModel.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
     )
@@ -1141,13 +1185,15 @@ def main(args):
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
 
+    # Freeze text encoders and vae
     vae.requires_grad_(False)
     text_encoder_one.requires_grad_(False)
     text_encoder_two.requires_grad_(False)
-    # t2iadapter.train will be called at the correct timestep
-    t2iadapter.requires_grad_(False)
-    
-    unet.train()
+
+    # propagate derivates between both
+    t2iadapter.train()
+    if args.train_unet_for_n_steps > 0:
+        unet.train()
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -1202,13 +1248,22 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    params_to_optimize = t2iadapter.parameters()
+    adapter_params = t2iadapter.parameters()
+    unet_params = unet.parameters()
     if args.lion_opt is True:
         from lion_pytorch import Lion
-        optimizer = Lion(model.parameters(), lr=args.learning_rate, weight_decay=args.lion_weight_decay)
+        unet_optimizer = Lion(unet_params, lr=args.learning_rate, weight_decay=args.lion_weight_decay)
+        adapter_optimizer = Lion(adapter_params, lr=args.learning_rate, weight_decay=args.lion_weight_decay)
     else:
-        optimizer = optimizer_class(
-            params_to_optimize,
+        adapter_optimizer = optimizer_class(
+            adapter_params,
+            lr=args.learning_rate,
+            betas=(args.adam_beta1, args.adam_beta2),
+            weight_decay=args.adam_weight_decay,
+            eps=args.adam_epsilon,
+        )
+        unet_optimizer = optimizer_class(
+            unet_params,
             lr=args.learning_rate,
             betas=(args.adam_beta1, args.adam_beta2),
             weight_decay=args.adam_weight_decay,
@@ -1239,7 +1294,12 @@ def main(args):
         original_size = (args.resolution, args.resolution)
         target_size = (args.resolution, args.resolution)
         crops_coords_top_left = (args.crops_coords_top_left_h, args.crops_coords_top_left_w)
-        prompt_batch = batch[args.caption_column]
+
+        # prompt batch
+        # prompt_batch = batch[args.caption_column]
+        
+        # TODO: Figure out how to get caption from 
+        prompt_batch = get_caption(batch, args)
 
         prompt_embeds, pooled_prompt_embeds = encode_prompt(
             prompt_batch, text_encoders, tokenizers, proportion_empty_prompts, is_train
@@ -1296,9 +1356,18 @@ def main(args):
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
 
-    lr_scheduler = get_scheduler(
+    adapter_lr_scheduler = get_scheduler(
         args.lr_scheduler,
-        optimizer=optimizer,
+        optimizer=adapter_optimizer,
+        num_warmup_steps=args.lr_warmup_steps,
+        num_training_steps=args.max_train_steps,
+        num_cycles=args.lr_num_cycles,
+        power=args.lr_power,
+    )
+
+    unet_lr_scheduler = get_scheduler(
+        args.lr_scheduler,
+        optimizer=unet_optimizer,
         num_warmup_steps=args.lr_warmup_steps,
         num_training_steps=args.max_train_steps,
         num_cycles=args.lr_num_cycles,
@@ -1306,8 +1375,8 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    t2iadapter, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        t2iadapter, optimizer, train_dataloader, lr_scheduler
+    t2iadapter, unet_optimizer, adapter_optimizer, train_dataloader, adapter_lr_scheduler, unet_lr_scheduler, = accelerator.prepare(
+        t2iadapter, unet_optimizer, adapter_optimizer, train_dataloader, adapter_lr_scheduler, unet_lr_scheduler,
     )
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -1379,14 +1448,9 @@ def main(args):
     )
 
     image_logs = None
-    did_unfreeze_adapter_step = False
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(t2iadapter):
-                if step > args.adapter_train_delay and did_unfreeze_adapter_step is False:
-                    t2iadapter.requires_grad_(True)
-                    t2iadapter.train()
-                    did_unfreeze_adapter_step = True
                     
                 if args.pretrained_vae_model_name_or_path is not None:
                     pixel_values = batch["pixel_values"].to(dtype=weight_dtype)
@@ -1482,9 +1546,19 @@ def main(args):
                 if accelerator.sync_gradients:
                     params_to_clip = t2iadapter.parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=args.set_grads_to_none)
+
+                # Train unet on certain steps
+                if step > args.train_unet_for_n_steps:
+                    unet_optimizer.step()
+                    unet_lr_scheduler.step()
+
+                 # Train adapter on certain steps
+                if global_step > args.unfreeze_adapter_step:
+                    adapter_optimizer.step()
+                    adapter_lr_scheduler.step()
+                
+                adapter_optimizer.zero_grad(set_to_none=args.set_grads_to_none)
+                unet_optimizer.zero_grad(set_to_none=args.set_grads_to_none)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -1528,7 +1602,11 @@ def main(args):
                             global_step,
                         )
 
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
+            logs = {
+                "loss": loss.detach().item(),
+                "lr_adapter": adapter_lr_scheduler.get_last_lr()[0],
+                "lr_unet": unet_lr_scheduler.get_last_lr()[0]
+                }
             progress_bar.set_postfix(**logs)
             accelerator.log(logs, step=global_step)
 
