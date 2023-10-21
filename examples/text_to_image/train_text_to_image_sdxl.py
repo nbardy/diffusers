@@ -55,6 +55,49 @@ from diffusers.training_utils import EMAModel, compute_snr
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
+from datasets import concatenate_datasets
+
+# Function for generating training noise, defaults to:
+# * "white" = high freq white noise(very stable, does not capture low freq well)
+# * "pyramid" = stable at the right values, covers a range of frequencies
+# 
+# Sample noise that we'll add to the latents
+def get_noise_like(x, args):
+    noise_type = args.noise_type
+    discount = args.pyramid_noise_discount
+
+    if noise_type == "white":
+        return torch.randn_like(x)
+    elif noise_type == "pyramid":
+        noise = pyramid_noise_like(x, discount=discount, random_multiplier=True)
+        return noise
+
+# From J. Whitaker Multi Resolution Noise
+# 
+# https://wandb.ai/johnowhitaker/multires_noise/reports/Multi-Resolution-Noise-for-Diffusion-Model-Training--VmlldzozNjYyOTU2
+#
+# With a slight modification for defaulting to deterministic freq scaling ratios(r)
+# this better suites the use case where we want to generate these later at
+# inference time.
+def pyramid_noise_like(x, discount=0.9, random_multiplier=False):
+  b, c, w, h = x.shape # EDIT: w and h get over-written, rename for a different variant!
+  u = nn.Upsample(size=(w, h), mode='bilinear')
+  noise = torch.randn_like(x)
+  for i in range(16):
+    if random_multiplier:
+        r = random.random()*2+2 # Rather than always going 2x, 
+    else:
+        r = 2
+    w, h = max(1, int(w/(r**i))), max(1, int(h/(r**i)))
+    noise += u(torch.randn(b, c, w, h).to(x)) * discount**i
+    if w==1 or h==1: break # Lowest resolution is 1x1
+  return noise/noise.std() # Scaled back to roughly unit variance
+
+# Function to map over dictionary values with a given function
+def map_dict_values(func, dictionary):
+    return {key: func(value) for key, value in dictionary.items()}
+
+
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.22.0.dev0")
@@ -62,9 +105,13 @@ check_min_version("0.22.0.dev0")
 logger = get_logger(__name__)
 
 
-DATASET_NAME_MAPPING = {
-    "lambdalabs/pokemon-blip-captions": ("image", "text"),
-}
+def get_dataset_name_mapping(args):
+    # DATASET_NAME_MAPPING.get(args.dataset_name, None)
+    # DATASET_NAME_MAPPING = {
+    #    "lambdalabs/pokemon-blip-captions": ("image", "text"),
+    #}
+
+    return ("image", "text")
 
 
 def save_model_card(
@@ -152,6 +199,7 @@ def parse_args(input_args=None):
         "--dataset_name",
         type=str,
         default=None,
+        nargs="+",
         help=(
             "The name of the Dataset (from the HuggingFace hub) to train on (could be your own, possibly private,"
             " dataset). It can also be a path pointing to a local copy of a dataset in your filesystem,"
@@ -184,10 +232,11 @@ def parse_args(input_args=None):
         help="The column of the dataset containing a caption or a list of captions.",
     )
     parser.add_argument(
-        "--validation_prompt",
+        "--validation_prompts",
         type=str,
         default=None,
-        help="A prompt that is used during validation to verify that the model is learning.",
+        nargs="+",
+        help="Prompts that are used during validation to verify that the model is learning.",
     )
     parser.add_argument(
         "--num_validation_images",
@@ -196,7 +245,7 @@ def parse_args(input_args=None):
         help="Number of images that should be generated during validation with `validation_prompt`.",
     )
     parser.add_argument(
-        "--validation_epochs",
+        "--validation_steps",
         type=int,
         default=1,
         help=(
@@ -454,6 +503,24 @@ def parse_args(input_args=None):
         "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
     )
     parser.add_argument("--noise_offset", type=float, default=0, help="The scale of noise offset.")
+    parser.add_argument(
+        "--noise_type",
+        type=str,
+        default="white",
+        help=(
+            "Noise type options",
+            "white",
+            "pyramid",
+        ),
+    )
+    parser.add_argument(
+        "--pyramid_noise_discount",
+        type=float,
+        default=0.8,
+        help=(
+            "Pyramid noise discount parameter"
+        )
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -518,6 +585,8 @@ def encode_prompt(batch, text_encoders, tokenizers, proportion_empty_prompts, ca
 
 def compute_vae_encodings(batch, vae):
     images = batch.pop("pixel_values")
+    print("length size")
+    print(len(list(images)))
     pixel_values = torch.stack(list(images))
     pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
     pixel_values = pixel_values.to(vae.device, dtype=vae.dtype)
@@ -525,7 +594,9 @@ def compute_vae_encodings(batch, vae):
     with torch.no_grad():
         model_input = vae.encode(pixel_values).latent_dist.sample()
     model_input = model_input * vae.config.scaling_factor
-    return {"model_input": model_input.cpu()}
+
+    return model_input
+
 
 
 def generate_timestep_weights(args, num_timesteps):
@@ -772,11 +843,13 @@ def main(args):
     # download the dataset.
     if args.dataset_name is not None:
         # Downloading and loading a dataset from the hub.
-        dataset = load_dataset(
-            args.dataset_name,
-            args.dataset_config_name,
-            cache_dir=args.cache_dir,
-        )
+        all_datasets = [
+            load_dataset(name, args.dataset_config_name, cache_dir=args.cache_dir)
+            for name in args.dataset_name
+        ]
+        all_datasets = [d["train"] for d in all_datasets]
+
+        dataset = concatenate_datasets(all_datasets)
     else:
         data_files = {}
         if args.train_data_dir is not None:
@@ -791,10 +864,10 @@ def main(args):
 
     # Preprocessing the datasets.
     # We need to tokenize inputs and targets.
-    column_names = dataset["train"].column_names
+    column_names = dataset.column_names
 
     # 6. Get the column names for input/target.
-    dataset_columns = DATASET_NAME_MAPPING.get(args.dataset_name, None)
+    dataset_columns = get_dataset_name_mapping(args.dataset_name )
     if args.image_column is None:
         image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
     else:
@@ -850,9 +923,9 @@ def main(args):
 
     with accelerator.main_process_first():
         if args.max_train_samples is not None:
-            dataset["train"] = dataset["train"].shuffle(seed=args.seed).select(range(args.max_train_samples))
+            dataset = dataset.shuffle(seed=args.seed).select(range(args.max_train_samples))
         # Set the training transforms
-        train_dataset = dataset["train"].with_transform(preprocess_train)
+        train_dataset = dataset.with_transform(preprocess_train)
 
     # Let's first compute all the embeddings so that we can free up the text encoders
     # from memory. We will pre-compute the VAE encodings too.
@@ -865,35 +938,45 @@ def main(args):
         proportion_empty_prompts=args.proportion_empty_prompts,
         caption_column=args.caption_column,
     )
-    compute_vae_encodings_fn = functools.partial(compute_vae_encodings, vae=vae)
+
     with accelerator.main_process_first():
         from datasets.fingerprint import Hasher
 
         # fingerprint used by the cache for the other processes to load the result
         # details: https://github.com/huggingface/diffusers/pull/4038#discussion_r1266078401
-        new_fingerprint = Hasher.hash(args)
-        new_fingerprint_for_vae = Hasher.hash("vae")
-        train_dataset = train_dataset.map(compute_embeddings_fn, batched=True, new_fingerprint=new_fingerprint)
+        #
+        # only the args that compute_embeddings_fn depends on are used to compute the fingerprint
+        # dataset_name, proportion_empty_prompts
+        relevant_args = {
+            "dataset_name": args.dataset_name,
+            "proportion_empty_prompts": args.proportion_empty_prompts,
+        }
+        new_fingerprint = Hasher.hash(relevant_args)
         train_dataset = train_dataset.map(
-            compute_vae_encodings_fn,
+            compute_embeddings_fn,
             batched=True,
-            batch_size=args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps,
-            new_fingerprint=new_fingerprint_for_vae,
+            new_fingerprint=new_fingerprint,
         )
+        #train_dataset = train_dataset.map(
+        #    compute_vae_encodings_fn,
+        #    batched=True,
+        #    batch_size=args.train_batch_size * accelerator.num_processes,
+        #    new_fingerprint=new_fingerprint,
+        #)
 
     del text_encoders, tokenizers, vae
     gc.collect()
     torch.cuda.empty_cache()
 
     def collate_fn(examples):
-        model_input = torch.stack([torch.tensor(example["model_input"]) for example in examples])
+        # model_input = torch.stack([torch.tensor(example["model_input"]) for example in examples])
         original_sizes = [example["original_sizes"] for example in examples]
         crop_top_lefts = [example["crop_top_lefts"] for example in examples]
         prompt_embeds = torch.stack([torch.tensor(example["prompt_embeds"]) for example in examples])
         pooled_prompt_embeds = torch.stack([torch.tensor(example["pooled_prompt_embeds"]) for example in examples])
 
         return {
-            "model_input": model_input,
+            # "model_input": model_input,
             "prompt_embeds": prompt_embeds,
             "pooled_prompt_embeds": pooled_prompt_embeds,
             "original_sizes": original_sizes,
@@ -994,31 +1077,42 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
                 # Sample noise that we'll add to the latents
-                model_input = batch["model_input"].to(accelerator.device)
-                noise = torch.randn_like(model_input)
+                # model_input = batch["model_input"].to(accelerator.device)
+
+                # encode pixel values with batch size of at most 8 to avoid OOM
+                pixel_values = batch["pixel_values"].to(dtype=weight_dtype)
+
+                latents = []
+                for i in range(0, pixel_values.shape[0], 8):
+                    latents.append(vae.encode(pixel_values[i : i + 8]).latent_dist.sample())
+                latents = torch.cat(latents, dim=0)
+                latents = latents * vae.config.scaling_factor
+                latents.to(weight_dtype)
+
+                noise = get_noise_like(latents, args)
                 if args.noise_offset:
                     # https://www.crosslabs.org//blog/diffusion-with-offset-noise
                     noise += args.noise_offset * torch.randn(
-                        (model_input.shape[0], model_input.shape[1], 1, 1), device=model_input.device
+                        (latents.shape[0], latents.shape[1], 1, 1), device=latents.device
                     )
 
-                bsz = model_input.shape[0]
+                bsz = latents.shape[0]
                 if args.timestep_bias_strategy == "none":
                     # Sample a random timestep for each image without bias.
                     timesteps = torch.randint(
-                        0, noise_scheduler.config.num_train_timesteps, (bsz,), device=model_input.device
+                        0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device
                     )
                 else:
                     # Sample a random timestep for each image, potentially biased by the timestep weights.
                     # Biasing the timestep weights allows us to spend less time training irrelevant timesteps.
                     weights = generate_timestep_weights(args, noise_scheduler.config.num_train_timesteps).to(
-                        model_input.device
+                        latents.device
                     )
                     timesteps = torch.multinomial(weights, bsz, replacement=True).long()
 
                 # Add noise to the model input according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
-                noisy_model_input = noise_scheduler.add_noise(model_input, noise, timesteps)
+                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # time ids
                 def compute_time_ids(original_size, crops_coords_top_left):
@@ -1040,7 +1134,7 @@ def main(args):
                 unet_added_conditions.update({"text_embeds": pooled_prompt_embeds})
                 prompt_embeds = prompt_embeds
                 model_pred = unet(
-                    noisy_model_input, timesteps, prompt_embeds, added_cond_kwargs=unet_added_conditions
+                    noisy_latents, timesteps, prompt_embeds, added_cond_kwargs=unet_added_conditions
                 ).sample
 
                 # Get the target for loss depending on the prediction type
@@ -1051,10 +1145,10 @@ def main(args):
                 if noise_scheduler.config.prediction_type == "epsilon":
                     target = noise
                 elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(model_input, noise, timesteps)
+                    target = noise_scheduler.get_velocity(latents, noise, timesteps)
                 elif noise_scheduler.config.prediction_type == "sample":
                     # We set the target to latents here, but the model_pred will return the noise sample prediction.
-                    target = model_input
+                    target = latents
                     # We will have to subtract the noise residual from the prediction to get the target sample.
                     model_pred = model_pred - noise
                 else:
@@ -1130,63 +1224,60 @@ def main(args):
             if global_step >= args.max_train_steps:
                 break
 
-        if accelerator.is_main_process:
-            if args.validation_prompt is not None and epoch % args.validation_epochs == 0:
-                logger.info(
-                    f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
-                    f" {args.validation_prompt}."
-                )
-                if args.use_ema:
-                    # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
-                    ema_unet.store(unet.parameters())
-                    ema_unet.copy_to(unet.parameters())
+            if accelerator.is_main_process:
+                if args.validation_prompts is not None and global_step % args.validation_steps == 0:
+                    logger.info(
+                        f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
+                        f" {args.validation_prompt}."
+                    )
+                    if args.use_ema:
+                        # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
+                        ema_unet.store(unet.parameters())
+                        ema_unet.copy_to(unet.parameters())
 
-                # create pipeline
-                vae = AutoencoderKL.from_pretrained(
-                    vae_path,
-                    subfolder="vae" if args.pretrained_vae_model_name_or_path is None else None,
-                    revision=args.revision,
-                )
-                pipeline = StableDiffusionXLPipeline.from_pretrained(
-                    args.pretrained_model_name_or_path,
-                    vae=vae,
-                    unet=accelerator.unwrap_model(unet),
-                    revision=args.revision,
-                    torch_dtype=weight_dtype,
-                )
-                if args.prediction_type is not None:
-                    scheduler_args = {"prediction_type": args.prediction_type}
-                    pipeline.scheduler = pipeline.scheduler.from_config(pipeline.scheduler.config, **scheduler_args)
+                    # create pipeline
+                    vae = AutoencoderKL.from_pretrained(
+                        vae_path,
+                        subfolder="vae" if args.pretrained_vae_model_name_or_path is None else None,
+                        revision=args.revision,
+                    )
+                    pipeline = StableDiffusionXLPipeline.from_pretrained(
+                        args.pretrained_model_name_or_path,
+                        vae=vae,
+                        unet=accelerator.unwrap_model(unet),
+                        revision=args.revision,
+                        torch_dtype=weight_dtype,
+                    )
+                    if args.prediction_type is not None:
+                        scheduler_args = {"prediction_type": args.prediction_type}
+                        pipeline.scheduler = pipeline.scheduler.from_config(pipeline.scheduler.config, **scheduler_args)
 
-                pipeline = pipeline.to(accelerator.device)
-                pipeline.set_progress_bar_config(disable=True)
+                    pipeline = pipeline.to(accelerator.device)
+                    pipeline.set_progress_bar_config(disable=True)
 
-                # run inference
-                generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
-                pipeline_args = {"prompt": args.validation_prompt}
+                    # run inference
+                    generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
 
-                with torch.cuda.amp.autocast():
-                    images = [
-                        pipeline(**pipeline_args, generator=generator, num_inference_steps=25).images[0]
-                        for _ in range(args.num_validation_images)
-                    ]
+                    all_images = {}
+                    with torch.cuda.amp.autocast():
+                        for prompt in args.validation_prompts:
+                            pipeline_args = { "prompt": prompt }
+                            images = [
+                                pipeline(**pipeline_args, generator=generator, num_inference_steps=25).images[0]
+                                for _ in range(args.num_validation_images)
+                            ]
+                            all_images[prompt] = images
 
-                for tracker in accelerator.trackers:
-                    if tracker.name == "tensorboard":
-                        np_images = np.stack([np.asarray(img) for img in images])
-                        tracker.writer.add_images("validation", np_images, epoch, dataformats="NHWC")
-                    if tracker.name == "wandb":
-                        tracker.log(
-                            {
-                                "validation": [
-                                    wandb.Image(image, caption=f"{i}: {args.validation_prompt}")
-                                    for i, image in enumerate(images)
-                                ]
-                            }
-                        )
+                    for tracker in accelerator.trackers:
+                        if tracker.name == "tensorboard":
+                            images = list(all_images.values())
+                            np_images = np.stack([np.asarray(img) for img in images])
+                            tracker.writer.add_images("validation", np_images, epoch, dataformats="NHWC")
+                        if tracker.name == "wandb":
+                            tracker.log(map_dict_values(lambda x: wandb.Image(x), all_images))
 
-                del pipeline
-                torch.cuda.empty_cache()
+                    del pipeline
+                    torch.cuda.empty_cache()
 
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
@@ -1225,14 +1316,7 @@ def main(args):
                     np_images = np.stack([np.asarray(img) for img in images])
                     tracker.writer.add_images("test", np_images, epoch, dataformats="NHWC")
                 if tracker.name == "wandb":
-                    tracker.log(
-                        {
-                            "test": [
-                                wandb.Image(image, caption=f"{i}: {args.validation_prompt}")
-                                for i, image in enumerate(images)
-                            ]
-                        }
-                    )
+                    tracker.log(map_dict_values(lambda x: wandb.Image(x), all_images))
 
         if args.push_to_hub:
             save_model_card(

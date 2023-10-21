@@ -69,6 +69,8 @@ from kornia.color.lab import rgb_to_lab
 import kornia
 
 
+from datasets import concatenate_datasets
+
 ## Utils functions for light generation
 def generate_points(n):
     points = []
@@ -889,24 +891,21 @@ def get_train_dataset(args, accelerator):
         ]
         datasets = [d["train"] for d in datasets]
 
-        if args.dataset_probs is not None:
-            probabilities = args.dataset_probs
-        else:
-            train_sizes = [len(dataset) for dataset in datasets]
-            probabilities = [train_size / sum(train_sizes) for train_size in train_sizes]
+        # print len of each dataset
+        print("length all")
+        for d in datasets:
+            print(len(d))
 
-        # Define seed
-        seed = 42
+        dataset = concatenate_datasets(datasets)
 
-        print(datasets)
-        # Interleave datasets
-        dataset = interleave_datasets(datasets, probabilities=probabilities, seed=seed)
+        print("length concat")
+        print(len(dataset))
+
     else:
         if args.train_data_dir is not None:
             dataset = load_dataset(
                 args.train_data_dir,
                 cache_dir=args.cache_dir,
-             #   streaming=True
             )
 
     # Preprocessing the datasets.
@@ -929,8 +928,8 @@ def get_train_dataset(args, accelerator):
         logger.info(f"caption column defaulting to {caption_column}")
     else:
         all_have_key = True
-        for dataset in datasets:
-            if not has_caption_column(dataset[0], args):
+        for d in datasets:
+            if not has_caption_column(d[0], args):
                 all_have_key = False
             
         if not all_have_key:
@@ -949,7 +948,12 @@ def get_train_dataset(args, accelerator):
             )
 
     with accelerator.main_process_first():
+        print("pre shuffle len", len(dataset))
+
         train_dataset = dataset.shuffle(seed=args.seed)
+
+        print("post shuffle train", len(train_dataset))
+
         if args.max_train_samples is not None:
             train_dataset = train_dataset.select(range(args.max_train_samples))
     return train_dataset
@@ -1192,8 +1196,7 @@ def main(args):
 
     # propagate derivates between both
     t2iadapter.train()
-    if args.train_unet_for_n_steps > 0:
-        unet.train()
+    unet.train()
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -1294,9 +1297,6 @@ def main(args):
         original_size = (args.resolution, args.resolution)
         target_size = (args.resolution, args.resolution)
         crops_coords_top_left = (args.crops_coords_top_left_h, args.crops_coords_top_left_w)
-
-        # prompt batch
-        # prompt_batch = batch[args.caption_column]
         
         # TODO: Figure out how to get caption from 
         prompt_batch = get_caption(batch, args)
@@ -1335,7 +1335,14 @@ def main(args):
 
         # fingerprint used by the cache for the other processes to load the result
         # details: https://github.com/huggingface/diffusers/pull/4038#discussion_r1266078401
-        new_fingerprint = Hasher.hash(args)
+        #
+        # only the args that compute_embeddings_fn depends on are used to compute the fingerprint
+        # dataset_name, proportion_empty_prompts
+        relevant_args = {
+            "dataset_name": args.dataset_name,
+            "proportion_empty_prompts": args.proportion_empty_prompts,
+        }
+        new_fingerprint = Hasher.hash(relevant_args)
         train_dataset = train_dataset.map(compute_embeddings_fn, batched=True, new_fingerprint=new_fingerprint)
 
     # Then get the training dataset ready to be passed to the dataloader.
@@ -1496,6 +1503,19 @@ def main(args):
                     down_block_additional_residuals=down_block_additional_residuals,
                 ).sample
 
+                kwargs = {
+                    'noisy_latents': noisy_latents,
+                    'timesteps': timesteps,
+                    'encoder_hidden_states': batch["prompt_ids"],
+                    'added_cond_kwargs': batch["unet_added_conditions"]
+                }
+
+                if global_step >= args.adapter_train_delay:
+                    kwargs['down_block_additional_residuals'] = down_block_additional_residuals
+
+                # Call the unet function with the arguments and keyword arguments
+                model_pred = unet(**kwargs).sample
+
 
                 # Get the target for loss depending on the prediction type
                 if args.prediction_type is not None:
@@ -1548,12 +1568,12 @@ def main(args):
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
                 # Train unet on certain steps
-                if step > args.train_unet_for_n_steps:
+                if step < args.train_unet_for_n_steps:
                     unet_optimizer.step()
                     unet_lr_scheduler.step()
 
                  # Train adapter on certain steps
-                if global_step > args.unfreeze_adapter_step:
+                if global_step >= args.adapter_train_delay :
                     adapter_optimizer.step()
                     adapter_lr_scheduler.step()
                 
