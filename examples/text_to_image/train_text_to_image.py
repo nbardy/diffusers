@@ -212,6 +212,7 @@ def parse_args():
     parser.add_argument(
         "--dataset_name",
         type=str,
+        nargs="+",
         default=None,
         help=(
             "The name of the Dataset (from the HuggingFace hub) to train on (could be your own, possibly private,"
