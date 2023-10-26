@@ -654,6 +654,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--dataset_name",
         type=str,
+        nargs="+",
         default=None,
         nargs="+",
         help=(
