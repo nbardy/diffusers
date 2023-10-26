@@ -1255,8 +1255,8 @@ def main(args):
     unet_params = unet.parameters()
     if args.lion_opt is True:
         from lion_pytorch import Lion
-        unet_optimizer = Lion(unet_params, lr=args.learning_rate, weight_decay=args.lion_weight_decay)
-        adapter_optimizer = Lion(adapter_params, lr=args.learning_rate, weight_decay=args.lion_weight_decay)
+        unet_optimizer = Lion(unet_params, lr=args.learning_rate, weight_decay=args.lion_weight_decay, use_triton=True)
+        adapter_optimizer = Lion(adapter_params, lr=args.learning_rate, weight_decay=args.lion_weight_decay, use_triton=True)
     else:
         adapter_optimizer = optimizer_class(
             adapter_params,
@@ -1494,18 +1494,7 @@ def main(args):
                     sample.to(dtype=weight_dtype) for sample in down_block_additional_residuals
                 ]
 
-                # Predict the noise residual
-                model_pred = unet(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=batch["prompt_ids"],
-                    added_cond_kwargs=batch["unet_added_conditions"],
-                    down_block_additional_residuals=down_block_additional_residuals,
-                ).sample
-
                 kwargs = {
-                    'noisy_latents': noisy_latents,
-                    'timesteps': timesteps,
                     'encoder_hidden_states': batch["prompt_ids"],
                     'added_cond_kwargs': batch["unet_added_conditions"]
                 }
@@ -1514,7 +1503,7 @@ def main(args):
                     kwargs['down_block_additional_residuals'] = down_block_additional_residuals
 
                 # Call the unet function with the arguments and keyword arguments
-                model_pred = unet(**kwargs).sample
+                model_pred = unet(noisy_latents, timesteps, **kwargs).sample
 
 
                 # Get the target for loss depending on the prediction type
@@ -1573,7 +1562,7 @@ def main(args):
                     unet_lr_scheduler.step()
 
                  # Train adapter on certain steps
-                if global_step >= args.adapter_train_delay :
+                if global_step >= args.adapter_train_delay:
                     adapter_optimizer.step()
                     adapter_lr_scheduler.step()
                 
