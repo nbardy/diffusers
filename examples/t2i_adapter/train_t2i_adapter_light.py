@@ -54,8 +54,10 @@ from transformers import AutoTokenizer, PretrainedConfig
 import diffusers
 from diffusers import (
     AutoencoderKL,
-    EulerDiscreteScheduler,
+    DDIMScheduler,
+    DPMSolverMultistepScheduler,
     DDPMScheduler,
+    EulerDiscreteScheduler,
     StableDiffusionXLAdapterPipeline,
     T2IAdapter,
     UNet2DConditionModel,
@@ -267,6 +269,10 @@ def log_validation(vae, unet, adapter, args, accelerator, weight_dtype, step):
     )
     pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
+
+    noise_scheduler = build_noise_scheduler(args)
+    pipeline.scheduler = noise_scheduler
+
 
     if args.enable_xformers_memory_efficient_attention:
         pipeline.enable_xformers_memory_efficient_attention()
@@ -1058,6 +1064,39 @@ def collate_fn(examples):
     }
 
 
+def build_noise_scheduler(args):
+    if args.scheduler == "DDPM":
+        noise_scheduler = DDPMScheduler.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="scheduler",
+            timestep_spacing="trailing",
+            prediction_type=args.prediction_type,
+        )
+    elif args.scheduler == "DPK":
+        noise_scheduler = DPMSolverMultistepScheduler.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="scheduler",
+            use_karras_sigmas=True,
+            prediction_type=args.prediction_type,
+        )
+    elif args.scheduler == "Euler":
+       noise_scheduler = EulerDiscreteScheduler.from_pretrained(
+          args.pretrained_model_name_or_path,
+          timestep_spacing="trailing" if args.scale_scheduler else None,
+          subfolder="scheduler",
+          prediction_type=args.prediction_type,
+       )
+    else:
+       noise_scheduler = DDIMScheduler.from_pretrained(
+          args.pretrained_model_name_or_path,
+          subfolder="scheduler",
+          rescale_betas_zero_snr=args.scale_scheduler,
+          timestep_spacing="trailing" if args.scale_scheduler else None,
+          prediction_type=args.prediction_type,
+       )
+
+    return noise_scheduler
+
 def main(args):
     logging_dir = Path(args.output_dir, args.logging_dir)
 
@@ -1118,12 +1157,8 @@ def main(args):
     )
 
     # Load scheduler and models
-    noise_scheduler = DDPMScheduler.from_pretrained(
-        args.pretrained_model_name_or_path,
-        subfolder="scheduler",
-        scale_timesteps=args.scale_scheduler,
-    )
-
+    noise_scheduler = build_noise_scheduler(args)
+        
     text_encoder_one = text_encoder_cls_one.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
@@ -1196,6 +1231,7 @@ def main(args):
     text_encoder_two.requires_grad_(False)
 
     # propagate derivates between both
+    
     t2iadapter.train()
     unet.train()
 
@@ -1372,7 +1408,6 @@ def main(args):
         num_cycles=args.lr_num_cycles,
         power=args.lr_power,
     )
-
     unet_lr_scheduler = get_scheduler(
         args.lr_scheduler,
         optimizer=unet_optimizer,
