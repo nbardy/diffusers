@@ -57,6 +57,8 @@ from diffusers.utils.import_utils import is_xformers_available
 
 from datasets import concatenate_datasets
 
+precomputed_vae_encodings = False
+
 # Function for generating training noise, defaults to:
 # * "white" = high freq white noise(very stable, does not capture low freq well)
 # * "pyramid" = stable at the right values, covers a range of frequencies
@@ -81,7 +83,7 @@ def get_noise_like(x, args):
 # inference time.
 def pyramid_noise_like(x, discount=0.9, random_multiplier=False):
   b, c, w, h = x.shape # EDIT: w and h get over-written, rename for a different variant!
-  u = nn.Upsample(size=(w, h), mode='bilinear')
+  u = torch.nn.Upsample(size=(w, h), mode='bilinear')
   noise = torch.randn_like(x)
   for i in range(16):
     if random_multiplier:
@@ -117,7 +119,7 @@ def get_dataset_name_mapping(args):
 def save_model_card(
     repo_id: str,
     images=None,
-    validation_prompt=None,
+    validation_prompts=None,
     base_model=str,
     dataset_name=str,
     repo_folder=None,
@@ -144,7 +146,7 @@ inference: true
     model_card = f"""
 # Text-to-image finetuning - {repo_id}
 
-This pipeline was finetuned from **{base_model}** on the **{args.dataset_name}** dataset. Below are some example images generated with the finetuned pipeline using the following prompt: {validation_prompt}: \n
+This pipeline was finetuned from **{base_model}** on the **{args.dataset_name}** dataset. Below are some example images generated with the finetuned pipeline using the following prompt: {" ".join(validation_prompts)}: \n
 {img_str}
 
 Special VAE used for training: {vae_path}.
@@ -540,6 +542,10 @@ def parse_args(input_args=None):
 
     return args
 
+# the above reequires all we want OR
+def has_caption_column(row, args):
+    return args.caption_column in row
+
 def get_train_dataset(args, accelerator):
     # Get the datasets: you can either provide your own training and evaluation files (see below)
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
@@ -600,17 +606,16 @@ def get_train_dataset(args, accelerator):
                 f"`--caption_column` value '{args.caption_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
 
-    if args.conditioning_image_column is None:
-        conditioning_image_column = column_names[2]
-        logger.info(f"conditioning image column defaulting to {conditioning_image_column}")
-    else:
-        conditioning_image_column = args.conditioning_image_column
-        if conditioning_image_column not in column_names:
-            raise ValueError(
-                f"`--conditioning_image_column` value '{args.conditioning_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
-            )
 
-    train_dataset = get_train_dataset(args, accelerator)
+    with accelerator.main_process_first():
+        print("pre shuffle len", len(dataset))
+
+        train_dataset = dataset.shuffle(seed=args.seed)
+
+        print("post shuffle train", len(train_dataset))
+
+        if args.max_train_samples is not None:
+            train_dataset = train_dataset.select(range(args.max_train_samples))
     return train_dataset
 
 
@@ -656,10 +661,8 @@ def encode_prompt(batch, text_encoders, tokenizers, proportion_empty_prompts, ca
     return {"prompt_embeds": prompt_embeds.cpu(), "pooled_prompt_embeds": pooled_prompt_embeds.cpu()}
 
 
-def compute_vae_encodings(batch, vae):
+def compute_vae_encodings(batch, vae, cpu=True):
     images = batch.pop("pixel_values")
-    print("length size")
-    print(len(list(images)))
     pixel_values = torch.stack(list(images))
     pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
     pixel_values = pixel_values.to(vae.device, dtype=vae.dtype)
@@ -667,8 +670,9 @@ def compute_vae_encodings(batch, vae):
     with torch.no_grad():
         model_input = vae.encode(pixel_values).latent_dist.sample()
     model_input = model_input * vae.config.scaling_factor
-
-    return model_input
+    if cpu:
+        model_input = model_input.cpu()
+    return {"model_input": model_input}
 
 
 
@@ -1018,36 +1022,55 @@ def main(args):
             "proportion_empty_prompts": args.proportion_empty_prompts,
         }
         new_fingerprint = Hasher.hash(relevant_args)
+        new_fingerprint = new_fingerprint + "_text_2_image"
+        new_fingerprint_vae = new_fingerprint + "_vae"
+        print("Mapping embeddings")
         train_dataset = train_dataset.map(
             compute_embeddings_fn,
             batched=True,
             new_fingerprint=new_fingerprint,
         )
-        #train_dataset = train_dataset.map(
-        #    compute_vae_encodings_fn,
-        #    batched=True,
-        #    batch_size=args.train_batch_size * accelerator.num_processes,
-        #    new_fingerprint=new_fingerprint,
-        #)
+        print("Mapping VAE encodings")
+        vae_batch_size_multiplier = 8
 
-    del text_encoders, tokenizers, vae
+        if precomputed_vae_encodings:
+            compute_vae_encodings_fn = functools.partial(compute_vae_encodings, vae=vae)
+            train_dataset = train_dataset.map(
+                compute_vae_encodings_fn,
+                batched=True,
+                batch_size=args.train_batch_size * accelerator.num_processes * vae_batch_size_multiplier,
+                new_fingerprint=new_fingerprint_vae,
+            )
+
+    del text_encoders, tokenizers
+    if precomputed_vae_encodings:
+        del vae
     gc.collect()
     torch.cuda.empty_cache()
 
     def collate_fn(examples):
-        # model_input = torch.stack([torch.tensor(example["model_input"]) for example in examples])
+        if precomputed_vae_encodings:
+            model_input = torch.stack([torch.tensor(example["model_input"]) for example in examples])
+        else:
+            pixel_values = torch.stack([torch.tensor(example["pixel_values"]) for example in examples])
         original_sizes = [example["original_sizes"] for example in examples]
         crop_top_lefts = [example["crop_top_lefts"] for example in examples]
         prompt_embeds = torch.stack([torch.tensor(example["prompt_embeds"]) for example in examples])
         pooled_prompt_embeds = torch.stack([torch.tensor(example["pooled_prompt_embeds"]) for example in examples])
 
-        return {
-            # "model_input": model_input,
+        result =  {
             "prompt_embeds": prompt_embeds,
             "pooled_prompt_embeds": pooled_prompt_embeds,
             "original_sizes": original_sizes,
             "crop_top_lefts": crop_top_lefts,
         }
+
+        if precomputed_vae_encodings:
+            result["model_input"] = model_input
+        else:
+            result["pixel_values"] = pixel_values
+
+        return result
 
     # DataLoaders creation:
     train_dataloader = torch.utils.data.DataLoader(
@@ -1143,17 +1166,10 @@ def main(args):
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(unet):
                 # Sample noise that we'll add to the latents
-                # model_input = batch["model_input"].to(accelerator.device)
-
-                # encode pixel values with batch size of at most 8 to avoid OOM
-                pixel_values = batch["pixel_values"].to(dtype=weight_dtype)
-
-                latents = []
-                for i in range(0, pixel_values.shape[0], 8):
-                    latents.append(vae.encode(pixel_values[i : i + 8]).latent_dist.sample())
-                latents = torch.cat(latents, dim=0)
-                latents = latents * vae.config.scaling_factor
-                latents.to(weight_dtype)
+                if precomputed_vae_encodings:
+                    latents = batch["model_input"].to(accelerator.device)
+                else:
+                    latents = compute_vae_encodings(batch, vae, cpu=False)["model_input"]
 
                 noise = get_noise_like(latents, args)
                 if args.noise_offset:
@@ -1294,7 +1310,7 @@ def main(args):
                 if args.validation_prompts is not None and global_step % args.validation_steps == 0:
                     logger.info(
                         f"Running validation... \n Generating {args.num_validation_images} images with prompt:"
-                        f" {args.validation_prompt}."
+                        f" {args.validation_prompts}."
                     )
                     if args.use_ema:
                         # Store the UNet parameters temporarily and load the EMA parameters to perform inference.
@@ -1332,15 +1348,12 @@ def main(args):
                                 pipeline(**pipeline_args, generator=generator, num_inference_steps=25).images[0]
                                 for _ in range(args.num_validation_images)
                             ]
-                            all_images[prompt] = images
+                            # Set max length to 150
+                            prompt = prompt[:150]
+                            all_images[prompt] = [wandb.Image(image) for image in images]
+                        
+                    wandb.log(all_images)
 
-                    for tracker in accelerator.trackers:
-                        if tracker.name == "tensorboard":
-                            images = list(all_images.values())
-                            np_images = np.stack([np.asarray(img) for img in images])
-                            tracker.writer.add_images("validation", np_images, epoch, dataformats="NHWC")
-                        if tracker.name == "wandb":
-                            tracker.log(map_dict_values(lambda x: wandb.Image(x), all_images))
 
                     del pipeline
                     torch.cuda.empty_cache()
@@ -1368,27 +1381,28 @@ def main(args):
 
         # run inference
         images = []
-        if args.validation_prompt and args.num_validation_images > 0:
-            pipeline = pipeline.to(accelerator.device)
-            generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
-            with torch.cuda.amp.autocast():
-                images = [
-                    pipeline(args.validation_prompt, num_inference_steps=25, generator=generator).images[0]
-                    for _ in range(args.num_validation_images)
-                ]
+        if args.validation_prompts and args.num_validation_images > 0:
+            image_dict = {}
 
-            for tracker in accelerator.trackers:
-                if tracker.name == "tensorboard":
-                    np_images = np.stack([np.asarray(img) for img in images])
-                    tracker.writer.add_images("test", np_images, epoch, dataformats="NHWC")
-                if tracker.name == "wandb":
-                    tracker.log(map_dict_values(lambda x: wandb.Image(x), all_images))
+            for validation_prompt in args.validation_prompts:
+                pipeline = pipeline.to(accelerator.device)
+                generator = torch.Generator(device=accelerator.device).manual_seed(args.seed) if args.seed else None
+                with torch.cuda.amp.autocast():
+                    images = [
+                        pipeline(validation_prompt, num_inference_steps=25, generator=generator).images[0]
+                        for _ in range(args.num_validation_images)
+                    ]
+
+                # Too long a key name break WB
+                prompt = validation_prompt[:150]
+                image_dict[prompt] = [wandb.Image(image) for image in images]
+                wandb.log(image_dict)
 
         if args.push_to_hub:
             save_model_card(
                 repo_id=repo_id,
                 images=images,
-                validation_prompt=args.validation_prompt,
+                validation_prompt=args.validation_prompts,
                 base_model=args.pretrained_model_name_or_path,
                 dataset_name=args.dataset_name,
                 repo_folder=args.output_dir,
