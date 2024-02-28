@@ -1409,27 +1409,44 @@ class StableDiffusionXLControlNetPipeline(
 
                 # if image is not list make it a single one
                 images = [image] if not isinstance(image, list) else image
-                all_blocks = []
+                if isinstance(image, list):
+                    all_blocks = []
 
-                for j, image_ in enumerate(image):
+                    for j, image_ in enumerate(image):
+                        raise ValueError("Not implemented: TODO: WE need to make sure we're passing the same args here as training for example we dropped the \"add_embeds\"")
+
+                        down_block_res_samples, mid_block_res_sample = self.controlnet(
+                            control_model_input,
+                            t,
+                            encoder_hidden_states=controlnet_prompt_embeds,
+                            controlnet_cond=image,
+                            conditioning_scale=cond_scale,
+                            guess_mode=guess_mode,
+                            added_cond_kwargs=controlnet_added_cond_kwargs,
+                            return_dict=False,
+                        )
+                        all_blocks.append((down_block_res_samples, mid_block_res_sample))
+                    
+                    # get mean for each value across each cell
+                    def mean_tensors(collection):
+                        return [torch.mean(torch.stack([d[i] for d in collection]), dim=0) for i in range(len(collection[0]))]
+                    
+                    down_block_res_samples = mean_tensors([d[0] for d in all_blocks])
+                    mid_block_res_sample = mean_tensors([d[1] for d in all_blocks])
+                else:
+                    raise ValueError("Not implemented")
+
+                    # TODO: Add back standard args
                     down_block_res_samples, mid_block_res_sample = self.controlnet(
                         control_model_input,
                         t,
-                        encoder_hidden_states=controlnet_prompt_embeds,
+                        encoder_hidden_states=prompt_embeds,
                         controlnet_cond=image,
                         conditioning_scale=cond_scale,
                         guess_mode=guess_mode,
                         added_cond_kwargs=controlnet_added_cond_kwargs,
                         return_dict=False,
                     )
-                    all_blocks.append((down_block_res_samples, mid_block_res_sample))
-                
-                # get mean for each value across each cell
-                def mean_tensors(collection):
-                    return [torch.mean(torch.stack([d[i] for d in collection]), dim=0) for i in range(len(collection[0]))]
-                
-                down_block_res_samples = mean_tensors([d[0] for d in all_blocks])
-                mid_block_res_sample = mean_tensors([d[1] for d in all_blocks])
                 
 
                 if guess_mode and self.do_classifier_free_guidance:
