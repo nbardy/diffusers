@@ -1182,7 +1182,7 @@ def main(args):
                     down_block_res_samples, mid_block_res_sample = controlnet(
                         noisy_latents,
                         timesteps,
-                        encoder_hidden_states=object["prompt_ids"],
+                        encoder_hidden_states=object[f"condition_prompt_ids_{idx}"],
                         added_cond_kwargs=batch["unet_added_conditions"],
                         controlnet_cond=controlnet_image,
                         return_dict=False,
