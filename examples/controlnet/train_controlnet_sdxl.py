@@ -1176,15 +1176,23 @@ def main(args):
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # ControlNet conditioning.
-                controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
-                down_block_res_samples, mid_block_res_sample = controlnet(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=batch["prompt_ids"],
-                    added_cond_kwargs=batch["unet_added_conditions"],
-                    controlnet_cond=controlnet_image,
-                    return_dict=False,
-                )
+                all_residuals = []
+                for idx, object in enumerate(batch["objects"]):
+                    controlnet_image = batch[f"conditioning_pixel_values_{idx}"].to(dtype=weight_dtype)
+                    down_block_res_samples, mid_block_res_sample = controlnet(
+                        noisy_latents,
+                        timesteps,
+                        encoder_hidden_states=object["prompt_ids"],
+                        added_cond_kwargs=batch["unet_added_conditions"],
+                        controlnet_cond=controlnet_image,
+                        return_dict=False,
+                    )
+                    all_residuals.append((down_block_res_samples, mid_block_res_sample))
+                
+                # avg pool
+                down_block_res_samples = [torch.stack(samples).mean(dim=0) for samples in zip(*all_residuals)[0]]
+                mid_block_res_sample = torch.stack([sample for sample in zip(*all_residuals)[1]]).mean(dim=0)
+
 
                 # Predict the noise residual
                 model_pred = unet(
