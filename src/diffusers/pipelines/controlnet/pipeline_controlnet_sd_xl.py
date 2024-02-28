@@ -959,6 +959,7 @@ class StableDiffusionXLControlNetPipeline(
         self,
         prompt: Union[str, List[str]] = None,
         prompt_2: Optional[Union[str, List[str]]] = None,
+        controlnet_prompts: Optional[Union[str, List[str]]] = None,
         image: PipelineImageInput = None,
         height: Optional[int] = None,
         width: Optional[int] = None,
@@ -1228,6 +1229,22 @@ class StableDiffusionXLControlNetPipeline(
             clip_skip=self.clip_skip,
         )
 
+        # Encode prompts for all controlnet_prompts
+        # use the same encode prompt
+        controlnet_prompt_embeds = []
+ 
+        for c_prompt in controlnet_prompts:
+            controlnet_prompt_embeds.append(
+                self.encode_prompt(
+                    c_prompt,
+                    device,
+                    num_images_per_prompt,
+                    self.do_classifier_free_guidance,
+                    clip_skip=self.clip_skip,
+                )
+            )
+
+
         # 3.2 Encode ip_adapter_image
         if ip_adapter_image is not None or ip_adapter_image_embeds is not None:
             image_embeds = self.prepare_ip_adapter_image_embeds(
@@ -1379,7 +1396,7 @@ class StableDiffusionXLControlNetPipeline(
                     }
                 else:
                     control_model_input = latent_model_input
-                    controlnet_prompt_embeds = prompt_embeds
+                    controlnet_prompt_embeds = controlnet_prompt_embeds
                     controlnet_added_cond_kwargs = added_cond_kwargs
 
                 if isinstance(controlnet_keep[i], list):
@@ -1390,16 +1407,30 @@ class StableDiffusionXLControlNetPipeline(
                         controlnet_cond_scale = controlnet_cond_scale[0]
                     cond_scale = controlnet_cond_scale * controlnet_keep[i]
 
-                down_block_res_samples, mid_block_res_sample = self.controlnet(
-                    control_model_input,
-                    t,
-                    encoder_hidden_states=controlnet_prompt_embeds,
-                    controlnet_cond=image,
-                    conditioning_scale=cond_scale,
-                    guess_mode=guess_mode,
-                    added_cond_kwargs=controlnet_added_cond_kwargs,
-                    return_dict=False,
-                )
+                # if image is not list make it a single one
+                images = [image] if not isinstance(image, list) else image
+                all_blocks = []
+
+                for j, image_ in enumerate(image):
+                    down_block_res_samples, mid_block_res_sample = self.controlnet(
+                        control_model_input,
+                        t,
+                        encoder_hidden_states=controlnet_prompt_embeds,
+                        controlnet_cond=image,
+                        conditioning_scale=cond_scale,
+                        guess_mode=guess_mode,
+                        added_cond_kwargs=controlnet_added_cond_kwargs,
+                        return_dict=False,
+                    )
+                    all_blocks.append((down_block_res_samples, mid_block_res_sample))
+                
+                # get mean for each value across each cell
+                def mean_tensors(collection):
+                    return [torch.mean(torch.stack([d[i] for d in collection]), dim=0) for i in range(len(collection[0]))]
+                
+                down_block_res_samples = mean_tensors([d[0] for d in all_blocks])
+                mid_block_res_sample = mean_tensors([d[1] for d in all_blocks])
+                
 
                 if guess_mode and self.do_classifier_free_guidance:
                     # Infered ControlNet only for the conditional batch.
