@@ -1234,15 +1234,15 @@ class StableDiffusionXLControlNetPipeline(
         controlnet_prompt_embeds = []
  
         for c_prompt in controlnet_prompts:
-            controlnet_prompt_embeds.append(
-                self.encode_prompt(
-                    c_prompt,
-                    device,
-                    num_images_per_prompt,
-                    self.do_classifier_free_guidance,
-                    clip_skip=self.clip_skip,
-                )
+            (c_prompt_embeds, _, _, _) = self.encode_prompt(
+                c_prompt,
+                device,
+                num_images_per_prompt,
+                self.do_classifier_free_guidance,
+                clip_skip=self.clip_skip,
             )
+
+            controlnet_prompt_embeds.append(c_prompt_embeds)
 
 
         # 3.2 Encode ip_adapter_image
@@ -1386,6 +1386,7 @@ class StableDiffusionXLControlNetPipeline(
 
                 # controlnet(s) inference
                 if guess_mode and self.do_classifier_free_guidance:
+                    raise ValueError("CFG not implemented for ControlNet pooling")
                     # Infer ControlNet only for the conditional batch.
                     control_model_input = latents
                     control_model_input = self.scheduler.scale_model_input(control_model_input, t)
@@ -1413,12 +1414,11 @@ class StableDiffusionXLControlNetPipeline(
                     all_blocks = []
 
                     for j, image_ in enumerate(image):
-                        raise ValueError("Not implemented: TODO: WE need to make sure we're passing the same args here as training for example we dropped the \"add_embeds\"")
 
                         down_block_res_samples, mid_block_res_sample = self.controlnet(
                             control_model_input,
                             t,
-                            encoder_hidden_states=controlnet_prompt_embeds,
+                            encoder_hidden_states=controlnet_prompt_embeds[j],
                             controlnet_cond=image,
                             conditioning_scale=cond_scale,
                             guess_mode=guess_mode,

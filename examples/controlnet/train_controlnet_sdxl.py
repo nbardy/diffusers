@@ -1190,8 +1190,12 @@ def main(args):
                     all_residuals.append((down_block_res_samples, mid_block_res_sample))
                 
                 # avg pool
-                down_block_res_samples = [torch.stack(samples).mean(dim=0) for samples in zip(*all_residuals)[0]]
-                mid_block_res_sample = torch.stack([sample for sample in zip(*all_residuals)[1]]).mean(dim=0)
+
+                def mean_tensors(collection):
+                    return [torch.mean(torch.stack([d[i] for d in collection]), dim=0) for i in range(len(collection[0]))]
+
+                down_block_res_samples = mean_tensors([d[0] for d in all_residuals])
+                mid_block_res_sample = mean_tensors([d[1] for d in all_residuals])
 
 
                 # Predict the noise residual
