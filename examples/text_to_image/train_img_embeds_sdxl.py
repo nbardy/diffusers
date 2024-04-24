@@ -71,6 +71,8 @@ from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
 
+from transformers import CLIPVisionModel, CLIPVisionModelWithProjection
+from transformers import AutoProcessor
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.28.0.dev0")
@@ -553,18 +555,50 @@ def encode_prompt(text_encoders, tokenizers, prompt, text_input_ids_list=None):
     return prompt_embeds, pooled_prompt_embeds
 
 
-def encode_image(image_encoders, image):
+def encode_image(image_encoders, image_processors, image):
     image_embeds_list = []
-    for i, image_encoder in enumerate(image_encoders):
+    full_embeds_list = []
+
+    # Ensure the image tensor is on the correct device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    image = image.to(device)
+
+    for i, (image_encoder, image_processor) in enumerate(
+        zip(image_encoders, image_processors)
+    ):
+        # Normalize from [-1, 1] to [0, 1]
+        normalized_image = (image + 1) / 2
+        inputs = image_processor(images=normalized_image, return_tensors="pt")
+        inputs.to(device)
+
         image_embeds = image_encoder(
-            image.to(image_encoder.device),
-            output_hidden_states=True,
-            return_dict=False,
+            **inputs, output_hidden_states=True, return_dict=False
         )
-        last_hidden_state = image_embeds[-1][-2]
+        full_embeds_list.append(image_embeds)
+        last_hidden_state = image_embeds[-1][-2]  # BxCxHxW
 
         image_embeds_list.append(last_hidden_state)
+
+    # Concatenate along the feature dimension
     image_embeds = torch.concat(image_embeds_list, dim=-1)
+
+    # Debugging shapes
+    print("Full embeds list:")
+    for full_embed in full_embeds_list:
+        i = 0
+        for item in full_embed:
+            i = i + 1
+            print("item " + str(i))
+            print(item.shape)
+
+    print("Image embed list:")
+    for image_embed in image_embeds_list:
+        i = 0
+        for item in image_embed:
+            i = i + 1
+            print("item", str(i))
+            print(item.shape)
+
     return image_embeds
 
 
@@ -656,12 +690,18 @@ def main(args):
         args.pretrained_model_name_or_path, args.revision, subfolder="text_encoder_2"
     )
 
-    from transformers import CLIPVisionModel, CLIPVisionModelWithProjection
 
     m1 = "openai/clip-vit-large-patch14"
     m2 = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
+
     image_encoder_one = CLIPVisionModel.from_pretrained(m1)
     image_encoder_two = CLIPVisionModelWithProjection.from_pretrained(m2)
+
+    # Let's add a processor for each model
+    # processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
+
+    processor_one = AutoProcessor.from_pretrained(m1)
+    processor_two = AutoProcessor.from_pretrained(m2)
 
     # Load scheduler and models
     noise_scheduler = DDPMScheduler.from_pretrained(
@@ -1286,9 +1326,6 @@ def main(args):
                 # Predict the noise residual
                 unet_added_conditions = {"time_ids": add_time_ids}
 
-                print("Prompt embed shape: ", batch["input_ids_one"].shape)
-                print("Prompt embed shape: ", batch["input_ids_two"].shape)
-
                 prompt_embeds, pooled_prompt_embeds = encode_prompt(
                     text_encoders=[text_encoder_one, text_encoder_two],
                     tokenizers=None,
@@ -1299,8 +1336,12 @@ def main(args):
                     ],
                 )
 
+                print("Prompt embed shape: ", prompt_embeds.shape)
+                print("Pooled prompt embed shape: ", pooled_prompt_embeds.shape)
+
                 image_embeds = encode_image(
                     image_encoders=[image_encoder_one, image_encoder_two],
+                    image_processors=[processor_one, processor_two],
                     image=batch["pixel_values"],
                 )
 

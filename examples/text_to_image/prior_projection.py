@@ -17,6 +17,7 @@ class QuickGELU(nn.Module):
         return x * torch.sigmoid(1.702 * x)
 
 
+# clip style Residual Attention Block
 class ResidualAttentionBlock(nn.Module):
     def __init__(self, d_model: int, n_head: int, attn_mask: torch.Tensor = None):
         super().__init__()
@@ -51,14 +52,79 @@ class ResidualAttentionBlock(nn.Module):
 
 # A single transformer layer that projecsts the input to a new space
 class PriorTransformer(nn.Module):
-    def __init__(self, final_size):
+    def __init__(self, final_size=768):
         super().__init__()
         self.layer = ResidualAttentionBlock(d_model=1024, n_head=8)
         # Should project to the final size
-        self.projection_layer = nn.Linear(1024, final_size)
+
+
+# Three steps
+# Projection [BxN] => Bx(N/4)x8
+# Self-Attention [Bx(N/4)x8] => Bx(N/4)x8
+# Projection [Bx(N/4)x8] => BxK
+# where N = input_dim
+#       K = output_dim
+class PriorTransformer1D(nn.Module):
+    def __init__(self, input_shape, output_shape, heads=8):
+        super().__init__()
+        self.input_projection = nn.Linear(input_shape[0], output_shape[0], bias=False)
 
     def forward(self, x: torch.Tensor):
-        x = self.layer(x)
-        x = self.projection_layer(x)
+        x = self.input_projection(x)
+        return x
+
+
+from einops import rearrange
+
+# Follows the same as 2D 
+class PriorTransformer2D(nn.Module):
+    def __init__(self, input_shape, output_shape):
+        super().__init__()
+
+        # Let's do two proections with a rearrange in the middle first we take the final dim and project to the inner dim
+        self.input_projection_1 = nn.Linear(input_shape[1], output_shape[1], bias=False)
+        self.input_projection_2 = nn.Linear(input_shape[0], output_shape[0], bias=False)
+        # self.attn = ResidualAttentionBlock(d_model=input_shape[1], n_head=8)
+
+    def forward(self, x: torch.Tensor):
+        x = self.input_projection_1(x)
+        x = rearrange(x, "b n d -> b d n")
+        x = self.input_projection_2(x)
+        x = rearrange(x, "b d n -> b n d")
+        # x = self.attn(x)
 
         return x
+
+
+class PriorTransformer(nn.Module):
+    def __init__(self, input_shape, output_shape):
+        super().__init__()
+        if len(input_shape) == 1:
+            self.transformer = PriorTransformer1D(input_shape, output_shape)
+        elif len(input_shape) == 2:
+            self.transformer = PriorTransformer2D(input_shape, output_shape)
+
+    def forward(self, x: torch.Tensor):
+        return self.transformer(x)
+
+if __name__ == "__main__":
+    # image_embeds torch.Size([1, 257, 2688])
+    #  =>
+    # prompt_embeds torch.Size([1, 77, 2048])
+    model = PriorTransformer(input_shape=(257, 2688), output_shape=(77, 2048))
+    x = torch.randn(1, 257, 2688)
+    out = model(x)
+
+    assert out.shape == (1, 77, 2048), f"Expected output shape (1, 77, 2048), got {out.shape}"
+    print("Passed 1D test")
+
+    # pooled_image_embeds torch.Size([1, 2304])
+    #  =>
+    # pooled_prompt_embeds torch.Size([1, 2048])
+    model = PriorTransformer(input_shape=(2304,), output_shape=(2048,))
+    x = torch.randn(1, 2304)
+    out = model(x)
+
+    assert out.shape == (1, 2048), f"Expected output shape (1, 2048), got {out.shape}"
+    print("Passed 2D test")
+
