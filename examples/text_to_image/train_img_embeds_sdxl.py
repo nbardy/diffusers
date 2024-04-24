@@ -74,6 +74,8 @@ from diffusers.utils.torch_utils import is_compiled_module
 from transformers import CLIPVisionModel, CLIPVisionModelWithProjection
 from transformers import AutoProcessor
 
+from prior_projection import PriorTransformer, encode_image, encode_prompt
+
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.28.0.dev0")
 
@@ -525,81 +527,6 @@ def tokenize_prompt(tokenizer, prompt):
     return text_input_ids
 
 
-# Adapted from pipelines.StableDiffusionXLPipeline.encode_prompt
-def encode_prompt(text_encoders, tokenizers, prompt, text_input_ids_list=None):
-    prompt_embeds_list = []
-
-    for i, text_encoder in enumerate(text_encoders):
-        if tokenizers is not None:
-            tokenizer = tokenizers[i]
-            text_input_ids = tokenize_prompt(tokenizer, prompt)
-        else:
-            assert text_input_ids_list is not None
-            text_input_ids = text_input_ids_list[i]
-
-        prompt_embeds = text_encoder(
-            text_input_ids.to(text_encoder.device),
-            output_hidden_states=True,
-            return_dict=False,
-        )
-
-        # We are only ALWAYS interested in the pooled output of the final text encoder
-        pooled_prompt_embeds = prompt_embeds[0]
-        prompt_embeds = prompt_embeds[-1][-2]
-        bs_embed, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.view(bs_embed, seq_len, -1)
-        prompt_embeds_list.append(prompt_embeds)
-
-    prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
-    pooled_prompt_embeds = pooled_prompt_embeds.view(bs_embed, -1)
-    return prompt_embeds, pooled_prompt_embeds
-
-
-def encode_image(image_encoders, image_processors, image):
-    image_embeds_list = []
-    full_embeds_list = []
-
-    # Ensure the image tensor is on the correct device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    image = image.to(device)
-
-    for i, (image_encoder, image_processor) in enumerate(
-        zip(image_encoders, image_processors)
-    ):
-        # Normalize from [-1, 1] to [0, 1]
-        normalized_image = (image + 1) / 2
-        inputs = image_processor(images=normalized_image, return_tensors="pt")
-        inputs.to(device)
-
-        image_embeds = image_encoder(
-            **inputs, output_hidden_states=True, return_dict=False
-        )
-        full_embeds_list.append(image_embeds)
-        last_hidden_state = image_embeds[-1][-2]  # BxCxHxW
-
-        image_embeds_list.append(last_hidden_state)
-
-    # Concatenate along the feature dimension
-    image_embeds = torch.concat(image_embeds_list, dim=-1)
-
-    # Debugging shapes
-    print("Full embeds list:")
-    for full_embed in full_embeds_list:
-        i = 0
-        for item in full_embed:
-            i = i + 1
-            print("item " + str(i))
-            print(item.shape)
-
-    print("Image embed list:")
-    for image_embed in image_embeds_list:
-        i = 0
-        for item in image_embed:
-            i = i + 1
-            print("item", str(i))
-            print(item.shape)
-
-    return image_embeds
 
 
 def main(args):
@@ -720,9 +647,16 @@ def main(args):
         variant=args.variant,
     )
 
-    from prior_projection import PriorTransformer
 
-    img_to_text_projection = PriorTransformer()
+    image_to_text_transformer_2 = PriorTransformer(
+        input_shape=[257, 2688],
+        output_shape=[77, 2048],
+    )
+
+    pooled_transformer = PriorTransformer(
+        input_shape=[2304],
+        output_shape=[2048],
+    )
 
     vae_path = (
         args.pretrained_model_name_or_path
@@ -748,6 +682,8 @@ def main(args):
     text_encoder_two.requires_grad_(False)
     image_encoder_one.requires_grad_(False)
     image_encoder_two.requires_grad_(False)
+    image_to_text_transformer_2.requires_grad_(False)
+    pooled_transformer.requires_grad_(False)
     unet.requires_grad_(False)
 
     # For mixed precision training we cast all non-trainable weights (vae, non-lora text_encoder and non-lora unet) to half-precision
@@ -771,6 +707,8 @@ def main(args):
     text_encoder_two.to(accelerator.device, dtype=weight_dtype)
     image_encoder_one.to(accelerator.device, dtype=weight_dtype)
     image_encoder_two.to(accelerator.device, dtype=weight_dtype)
+    image_to_text_transformer_2.to(accelerator.device, dtype=weight_dtype)
+    pooled_transformer.to(accelerator.device, dtype=weight_dtype)
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -1327,36 +1265,43 @@ def main(args):
                 unet_added_conditions = {"time_ids": add_time_ids}
 
                 prompt_embeds, pooled_prompt_embeds = encode_prompt(
-                    text_encoders=[text_encoder_one, text_encoder_two],
-                    tokenizers=None,
-                    prompt=None,
+                    text_encoder=text_encoder_one,
+                    text_encoder_with_projection=text_encoder_two,
+                    tokenizers=[tokenizer_one, tokenizer_two],
                     text_input_ids_list=[
                         batch["input_ids_one"],
                         batch["input_ids_two"],
                     ],
                 )
 
-                print("Prompt embed shape: ", prompt_embeds.shape)
-                print("Pooled prompt embed shape: ", pooled_prompt_embeds.shape)
+                print("Prompt embed shape: ", prompt_embeds.shape)  # Bx77x2048
+                print("Pooled prompt embed shape: ", pooled_prompt_embeds.shape)  # Bx2048
 
-                image_embeds = encode_image(
-                    image_encoders=[image_encoder_one, image_encoder_two],
+                image_embeds, pooled_image_embeds = encode_image(
+                    image_encoder=image_encoder_one,
+                    image_encoder_with_projection=image_encoder_two,
                     image_processors=[processor_one, processor_two],
                     image=batch["pixel_values"],
                 )
 
-                projected_image_embeds, projected_pooled_image_embeds = (
-                    img_to_text_projection(image_embeds)
+                # Define transformers for projecting image embeddings to text embedding space
+                image_to_text_transformer = PriorTransformer(
+                    input_shape=[257, 2688],
+                    output_shape=[77, 2048],
+                )
+                pooled_transformer = PriorTransformer(
+                    input_shape=[2304],
+                    output_shape=[2048],
                 )
 
-                print("Projected image embeds shape: ", projected_image_embeds.shape)
-                print(
-                    "Projected pooled image embeds shape: ",
-                    projected_pooled_image_embeds.shape,
-                )
+                # Set transformers to evaluation mode and move to device
+                image_to_text_transformer.eval().to(accelerator.device)
+                pooled_transformer.eval().to(accelerator.device)
 
-                print("Prompt embed shape: ", prompt_embeds.shape)
-                print("Pooled prompt embed shape: ", pooled_prompt_embeds.shape)
+                # Project image embeddings to the text embedding space
+                projected_image_embeds = image_to_text_transformer(image_embeds)
+                projected_pooled_image_embeds = pooled_transformer(pooled_image_embeds)
+
 
                 # do 50% to train on image embeds
                 if random.random() < 0.5:
