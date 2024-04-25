@@ -527,8 +527,6 @@ def tokenize_prompt(tokenizer, prompt):
     return text_input_ids
 
 
-
-
 def main(args):
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
@@ -617,7 +615,6 @@ def main(args):
         args.pretrained_model_name_or_path, args.revision, subfolder="text_encoder_2"
     )
 
-
     m1 = "openai/clip-vit-large-patch14"
     m2 = "laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"
 
@@ -646,7 +643,6 @@ def main(args):
         revision=args.revision,
         variant=args.variant,
     )
-
 
     image_to_text_transformer_2 = PriorTransformer(
         input_shape=[257, 2688],
@@ -1274,9 +1270,6 @@ def main(args):
                     ],
                 )
 
-                print("Prompt embed shape: ", prompt_embeds.shape)  # Bx77x2048
-                print("Pooled prompt embed shape: ", pooled_prompt_embeds.shape)  # Bx2048
-
                 image_embeds, pooled_image_embeds = encode_image(
                     image_encoder=image_encoder_one,
                     image_encoder_with_projection=image_encoder_two,
@@ -1294,14 +1287,15 @@ def main(args):
                     output_shape=[2048],
                 )
 
-                # Set transformers to evaluation mode and move to device
-                image_to_text_transformer.eval().to(accelerator.device)
-                pooled_transformer.eval().to(accelerator.device)
+                # Set transformers to evaluation mode, move to device, and ensure correct dtype
+                image_to_text_transformer.to(
+                    accelerator.device, dtype=weight_dtype
+                ).eval()
+                pooled_transformer.to(accelerator.device, dtype=weight_dtype).eval()
 
                 # Project image embeddings to the text embedding space
                 projected_image_embeds = image_to_text_transformer(image_embeds)
                 projected_pooled_image_embeds = pooled_transformer(pooled_image_embeds)
-
 
                 # do 50% to train on image embeds
                 if random.random() < 0.5:

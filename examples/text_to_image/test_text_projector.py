@@ -39,7 +39,7 @@ def tokenize_prompt(tokenizer, prompt):
 caption_column = "text"
 
 
-def tokenize_captions(examples, is_train=True):
+def tokenize_captions(examples, tokenizers, is_train=True):
     captions = []
     for caption in examples[caption_column]:
         if isinstance(caption, str):
@@ -51,12 +51,15 @@ def tokenize_captions(examples, is_train=True):
             raise ValueError(
                 f"Caption column `{caption_column}` should contain either strings or lists of strings."
             )
+    tokenizer_one = tokenizers[0]
+    tokenizer_two = tokenizers[1]
+
     tokens_one = tokenize_prompt(tokenizer_one, captions)
     tokens_two = tokenize_prompt(tokenizer_two, captions)
     return tokens_one, tokens_two
 
 
-def preprocess_train(examples):
+def preprocess_train(examples, tokenizers):
     args = {
         "resolution": 1024,
         "center_crop": False,
@@ -90,7 +93,7 @@ def preprocess_train(examples):
     examples["original_sizes"] = original_sizes
     examples["crop_top_lefts"] = crop_top_lefts
     examples["pixel_values"] = all_images
-    tokens_one, tokens_two = tokenize_captions(examples)
+    tokens_one, tokens_two = tokenize_captions(examples, tokenizers)
     examples["input_ids_one"] = tokens_one
     examples["input_ids_two"] = tokens_two
     return examples
@@ -175,8 +178,11 @@ def main():
     # Preprocess the dataset
     processed_dataset = (
         dataset["train"]
-        .select([0])
-        .with_transform(preprocess_train, output_all_columns=True)
+        .select([1, 2])
+        .with_transform(
+            lambda x: preprocess_train(x, [tokenizer_one, tokenizer_two]),
+            output_all_columns=True,
+        )
     )
 
     # Create the DataLoader
@@ -231,7 +237,6 @@ def main():
         #  =>
         # prompt_embeds torch.Size([1, 77, 2048])
 
-
         # pooled_image_embeds torch.Size([1, 2304])
         #  =>
         # pooled_prompt_embeds torch.Size([1, 2048])
@@ -252,8 +257,14 @@ def main():
         pooled_image_embed_projected_to_text = pooled_transformer(pooled_image_embeds)
         image_embed_projected_to_text = image_to_text_transformer_2(image_embeds)
 
-        print( "Shape of pooled_image_embed_projected_to_text:", pooled_image_embed_projected_to_text.shape)
-        print( "Shape of image_embed_projected_to_text:", image_embed_projected_to_text.shape)
+        print(
+            "Shape of pooled_image_embed_projected_to_text:",
+            pooled_image_embed_projected_to_text.shape,
+        )
+        print(
+            "Shape of image_embed_projected_to_text:",
+            image_embed_projected_to_text.shape,
+        )
 
         print("Shape of prompt_embeds:", prompt_embeds.shape)
         print("Shape of pooled_prompt_embeds:", pooled_prompt_embeds.shape)
@@ -262,12 +273,18 @@ def main():
 
         if image_embed_projected_to_text.shape != prompt_embeds.shape:
             print("Mismatch in shapes:")
-            print( "image_embed_projected_to_text.shape:", image_embed_projected_to_text.shape)
+            print(
+                "image_embed_projected_to_text.shape:",
+                image_embed_projected_to_text.shape,
+            )
             print("prompt_embeds.shape:", prompt_embeds.shape)
 
         if pooled_image_embed_projected_to_text.shape != pooled_prompt_embeds.shape:
             print("Mismatch in pooled shapes:")
-            print( "pooled_image_embed_projected_to_text.shape:", pooled_image_embed_projected_to_text.shape)
+            print(
+                "pooled_image_embed_projected_to_text.shape:",
+                pooled_image_embed_projected_to_text.shape,
+            )
             print("pooled_prompt_embeds.shape:", pooled_prompt_embeds.shape)
 
 
